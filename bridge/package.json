@@ -1,0 +1,21 @@
+{
+  "name": "wha-bridge",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "portal": "node src/portal.js",
+    "tunnel": "node src/tunnel.js",
+    "seed-memory": "node src/seed-memory.js",
+    "setup:stt": "python3 -m venv stt/.venv && stt/.venv/bin/python -m pip install -r stt/requirements.txt"
+  },
+  "dependencies": {
+    "baileys": "^7.0.0-rc14",
+    "pino": "^10.3.1",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

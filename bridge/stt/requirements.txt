@@ -1,0 +1,8 @@
+# Pinned to the set verified on Python 3.14: av>=18 dropped open(metadata_errors=) that faster-whisper 1.2.1 uses.
+faster-whisper==1.2.1
+av==17.0.1
+ctranslate2==4.7.1
+huggingface-hub==1.14.0
+onnxruntime==1.26.0
+tokenizers==0.23.1
+numpy==2.4.4

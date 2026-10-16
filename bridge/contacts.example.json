@@ -1,0 +1,27 @@
+[
+  {
+    "jid": "5210000000001@s.whatsapp.net",
+    "name": "Contacto A",
+    "register": "tu",
+    "tenant": "demo",
+    "canTriggerImplementation": true
+  },
+  {
+    "jid": "120363000000000001@g.us",
+    "name": "Grupo Demo",
+    "type": "group",
+    "tenant": "demo",
+    "register": "tu",
+    "canTriggerImplementation": false,
+    "respondTo": [
+      {
+        "name": "Contacto B",
+        "jids": ["100000000000001@lid", "5210000000002@s.whatsapp.net"]
+      },
+      {
+        "name": "Contacto C",
+        "jids": ["100000000000002@lid", "5210000000003@s.whatsapp.net"]
+      }
+    ]
+  }
+]

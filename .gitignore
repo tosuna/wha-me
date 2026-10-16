@@ -1,0 +1,11 @@
+bridge/node_modules/
+bridge/auth/
+bridge/state/
+bridge/contacts.json
+.env*
+__pycache__/
+.DS_Store
+bridge/stt/.venv/
+
+# Your own config, adapters and skill (see README). Already-tracked files under private/ stay tracked.
+private/
