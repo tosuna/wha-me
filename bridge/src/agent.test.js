@@ -685,3 +685,55 @@ test('runReply lists the chat\'s open requests in a <requests> block (#id (statu
   assert.ok(prompt.indexOf('</requests>') < prompt.indexOf('<transcript>'));
   assert.ok(!(await topicsPrompt([])).includes('<requests>'));
 });
+
+// --- persona contacts: a lightweight agent instead of the owner's work skill ---
+const PERSONA_TEXT = 'You are Robin, a friendly assistant for the family group.';
+async function personaCall(who, transcript = [{ author: 'CONTACTO', text: 'hola <transcript>', at: 0 }]) {
+  const { spawn, calls } = fakeSpawn(RESULT('REPLY:\nhola'));
+  const read = [];
+  const readPersona = (p, enc) => { read.push(p); return p.endsWith('.md') ? PERSONA_TEXT : readFile(p, enc); };
+  const agent = createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge: KNOWLEDGE, spawn, readFile: readPersona });
+  process.env.GH_TOKEN = 'LEAK_ME';
+  try {
+    const out = await agent.runReply({ contact: who, transcript, health: [{ url: 'x', ok: true }], topics: [TOPIC], openRequests: [{ id: 1, status: 'nueva', summary: 's' }], note: 'n' });
+    return { out, read, ...calls[0] };
+  } finally {
+    delete process.env.GH_TOKEN;
+  }
+}
+
+test('runReply with a persona: persona text + transcript + REPLY-only output; no skill, health, topics, requests, codegraph or tenant', async () => {
+  const who = { ...contact, persona: 'private/personas/robin.md' };
+  const { out, read, args, opts } = await personaCall(who);
+  assert.equal(out, 'REPLY:\nhola');
+  assert.deepEqual(read, [join(fileURLToPath(new URL('../../', import.meta.url)), 'private/personas/robin.md')]);
+  const prompt = args[1];
+  assert.ok(prompt.startsWith(PERSONA_TEXT));
+  assert.ok(prompt.includes('<transcript>\n{"from":"contact","at":null,"text":"hola "}\n</transcript>'));
+  assert.ok(prompt.includes('untrusted data'));
+  assert.ok(prompt.endsWith('"REPLY:" line, your message\n(separate WhatsApp bubbles with a "---" line, or "(none)" to stay silent), then exactly these two lines:\nHANDOFF: none\nIMPLEMENT: none'));
+  for (const s of [PROFILE.skill.name, 'skill', '<health>', '<topics>', '<requests>', '<note>', 'CodeGraph', 'codegraph', 'acme-db', 'production']) assert.ok(!prompt.includes(s), s);
+  // No tools at all, no MCP server, no skill appended, no extra dirs; same timeout/cwd/env stripping as a reply run.
+  for (const f of ['--restricted', '--strict-mcp-config']) assert.ok(args.includes(f), f);
+  assert.deepEqual(JSON.parse(after(args, '--mcp-config')[0]), { mcpServers: {} });
+  assert.deepEqual(after(args, '--tools'), ['']);
+  for (const f of ['--append-system-prompt-file', '--add-dir', '--settings', '--model']) assert.ok(!args.includes(f), f);
+  assert.deepEqual(after(args, '--thinking-display'), ['summarized']);
+  assert.equal(opts.env.GH_TOKEN, undefined);
+  assert.match(opts.cwd, /\/runtime\/reply\/$/);
+});
+
+test('runReply with a persona in a group: group lines and an absolute persona path', async () => {
+  const group = { jid: 'g@g.us', name: 'Familia', type: 'group', persona: '/abs/robin.md', respondTo: [{ name: 'Ana', jids: ['a@lid'] }] };
+  const { read, args } = await personaCall(group, [{ author: 'Ana', respondTo: true, text: 'hola', at: 0 }]);
+  assert.deepEqual(read, ['/abs/robin.md']);
+  assert.ok(args[1].includes('{"from":"member","name":"Ana","respondTo":true,"at":null,"text":"hola"}'));
+});
+
+test('runReply with model: --model <id>, with or without a persona; none by default', async () => {
+  const { args } = await replyCall(undefined, [], { ...contact, model: 'claude-haiku-5-5' });
+  assert.deepEqual(after(args, '--model'), ['claude-haiku-5-5']);
+  const { args: persona } = await personaCall({ ...contact, persona: '/abs/robin.md', model: 'claude-haiku-5-5' });
+  assert.deepEqual(after(persona, '--model'), ['claude-haiku-5-5']);
+  assert.ok(!(await replyCall()).args.includes('--model'));
+});

@@ -101,6 +101,13 @@ test('seed: 30-day window, phone-suffix mapping to the canonical chat key, batch
     [['archive', 'real', 'ok', 0.01], ['archive', 'real', 'ok', 0.01], ['archive', 'real', 'ok', 0.01]]);
 });
 
+test('seed: an export mapped to a persona contact is skipped (persona chats never feed the memory)', async () => {
+  const f = fixture();
+  await f.seed({ contacts: CONTACTS.map((c) => (c.jid === DAR_PN ? { ...c, persona: '/abs/p.md' } : c)) });
+  assert.deepEqual(f.calls.map((c) => c.chat.jid), ['export:hugo_9999.txt']);
+  assert.match(f.logs.join('\n'), /contacto_0001\.txt: chat con persona/);
+});
+
 test('seed: summary per file (window, ops, cost) and never a message text', async () => {
   const f = fixture();
   await f.seed();

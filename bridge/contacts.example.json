@@ -23,5 +23,21 @@
         "jids": ["100000000000002@lid", "5210000000003@s.whatsapp.net"]
       }
     ]
+  },
+  {
+    "jid": "120363000000000002@g.us",
+    "name": "Grupo Familia",
+    "type": "group",
+    "register": "tu",
+    "canTriggerImplementation": false,
+    "persona": "skills/example-persona.md",
+    "model": "claude-haiku-5-5",
+    "anyHour": true,
+    "respondTo": [
+      {
+        "name": "Contacto D",
+        "jids": ["100000000000003@lid", "5210000000004@s.whatsapp.net"]
+      }
+    ]
   }
 ]

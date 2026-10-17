@@ -1,6 +1,6 @@
 import { none as noActions, reviewHint } from './actions.js';
 import { createConsoleTrace } from './console-trace.js';
-import { lookupContact, respondToOf } from './core/allowlist.js';
+import { isPersona, lookupContact, respondToOf } from './core/allowlist.js';
 import { noFeedback } from './feedback.js';
 import { noRequests } from './requests.js';
 import { noRunLog } from './run-log.js';
@@ -135,7 +135,11 @@ export function createBridge({
   const contactOf = (jid) => core.lookupContact(contacts, jid);
   const memoryChatOf = (jid) => (contactOf(jid) ? null : core.lookupContact(memoryChats.list(), jid)); // contacts.json wins
   const people = contacts.filter((c) => c.type !== 'group');
-  const chatOf = (jid) => canonicalChat(jid, contacts, memoryChats.list());
+  // Persona chats never feed the topic memory (archive, events, catch-up) nor the learning pairs.
+  const chatOf = (jid) => (isPersona(contactOf(jid)) ? null : canonicalChat(jid, contacts, memoryChats.list()));
+  const feedbackOf = (jid) => (isPersona(contactOf(jid)) ? noFeedback : feedback);
+  // contacts.json `anyHour: true`: that chat ignores profile.hours.
+  const inHours = (jid) => !!contactOf(jid)?.anyHour || core.isWithinHours(clock.now(), profile);
   const jidsOf = (chat) => (chat.kind === 'group' || !contactOf(chat.jid) ? [chat.jid]
     : people.filter((p) => contactKey(p.name) === contactKey(chat.name)).map((p) => p.jid));
   const alertIncident = (job, contact, reason) => notify({
@@ -282,14 +286,14 @@ export function createBridge({
       if (store.isSentId(msg.id)) return;
       store.setLastManualFromMeAt(jid, msg.timestamp);
       append(jid, { author: OWNER, text: msg.text, at: msg.timestamp });
-      feedback.manual(jid, msg.text, msg.timestamp);
+      feedbackOf(jid).manual(jid, msg.text, msg.timestamp);
       debouncer.cancel(jid);
       store.clearPending(jid);
       unread.delete(jid);
       return;
     }
     append(jid, { author: 'CONTACTO', text: msg.text, at: msg.timestamp });
-    feedback.contact(jid, msg.timestamp);
+    feedbackOf(jid).contact(jid, msg.timestamp);
     asked.set(jid, (asked.get(jid) ?? 0) + 1);
     unread.set(jid, [...(unread.get(jid) ?? []), msg.key]);
     schedule(jid, replyDelay());
@@ -318,7 +322,7 @@ export function createBridge({
       append(jid, msg.fromMe ? { author: OWNER, text: msg.text, at: msg.timestamp } : { author: memberName(msg), by: msg.participant, text: msg.text, at: msg.timestamp });
       if (msg.fromMe) {
         store.setLastManualFromMeAt(jid, msg.timestamp);
-        feedback.manual(jid, msg.text, msg.timestamp);
+        feedbackOf(jid).manual(jid, msg.text, msg.timestamp);
       } else if (!strangers.has(msg.participant)) {
         strangers.add(msg.participant);
         log(`group ${group.name}: ${(msg.participantIds ?? []).join(' / ')} (${msg.pushName ?? 'sin nombre'}) is not in respondTo`);
@@ -331,7 +335,7 @@ export function createBridge({
       return;
     }
     append(jid, { author: member.name, by: msg.participant, text: msg.text, at: msg.timestamp, respondTo: true });
-    feedback.contact(jid, msg.timestamp);
+    feedbackOf(jid).contact(jid, msg.timestamp);
     asked.set(jid, (asked.get(jid) ?? 0) + 1);
     unread.set(jid, [...(unread.get(jid) ?? []), msg.key]);
     triggers.set(jid, { key: msg.key, message: msg.message });
@@ -373,12 +377,13 @@ export function createBridge({
 
   async function reply(jid) {
     if (store.getState().paused) return;
-    if (!store.getState().shadow && !core.isWithinHours(clock.now(), profile)) return defer(jid);
+    if (!store.getState().shadow && !inHours(jid)) return defer(jid);
     if (ownerActive(jid)) return;
     if (busy.has(jid)) return schedule(jid, replyDelay());
 
     const contact = contactOf(jid);
     const group = contact.type === 'group';
+    const persona = isPersona(contact);
     const spoke0 = spoke.get(jid) ?? 0;
     const asked0 = asked.get(jid) ?? 0;
     let out;
@@ -389,14 +394,14 @@ export function createBridge({
     let label = contact.name;
     busy.add(jid);
     try {
-      const results = await health();
+      const results = persona ? [] : await health(); // a persona run gets no health, topics or work data
       transcript = store.getTranscript(jid); // read after the health check, as before: it can take seconds
       const asking = group ? (e) => e.respondTo : (e) => e.author === 'CONTACTO';
       const inbound = transcript.slice(transcript.findLastIndex((e) => !asking(e)) + 1).map((e) => e.text);
       if (group) label = `${contact.name} (grupo, responde a ${transcript.findLast(asking)?.author ?? '?'})`;
       t = trace.turn({ mode: 'real', contact, jid, inbound });
       run = runLog.start({ kind: 'reply', mode: 'real', contact, jid });
-      const recalled = recallTopics(jid, group ? transcript.findLast(asking)?.author : contact.name, inbound.join('\n'));
+      const recalled = persona ? [] : recallTopics(jid, group ? transcript.findLast(asking)?.author : contact.name, inbound.join('\n'));
       t.memory(recalled);
       t.health(results);
       const onEvent = (e) => { t.event(e); run.event(e); };
@@ -405,6 +410,8 @@ export function createBridge({
       const openRequests = requests.open(jid, { shadow: !!store.getState().shadow });
       raw = await agent.runReply({ contact, transcript, health: results, topics: recalled, openRequests, onEvent, ...(note && { note }) });
       out = core.parseAgentOutput(raw, { idPattern: actions.idPattern });
+      // A persona may only REPLY: anything else (handoff, implement, approve) is no reply at all.
+      if (persona && (out.handoff || out.implement || out.approve)) out = { bubbles: [], handoff: null, implement: null, approve: null };
     } catch (e) {
       t?.decision({ error: e });
       run?.fail(e);
@@ -428,7 +435,7 @@ export function createBridge({
       throw e;
     }
     run.finish({ result: raw, decision: out, outcome });
-    feedback.draft({ runId: run.id, jid, contact, out, outcome, transcript });
+    feedbackOf(jid).draft({ runId: run.id, jid, contact, out, outcome, transcript });
   }
 
   // What happens to a parsed reply; resolves its run-log outcome.
@@ -475,7 +482,7 @@ export function createBridge({
       await say(fmtDraft('[descartado]', { ...contact, name: label }, out));
       return 'discarded';
     }
-    if (!core.isWithinHours(clock.now(), profile)) {
+    if (!inHours(jid)) {
       defer(jid);
       return 'deferred';
     }
@@ -575,7 +582,7 @@ export function createBridge({
       const at = clock.now().getTime();
       store.addSentId(id);
       append(jid, { author: OWNER, ...entry, at });
-      feedback.manual(jid, entry.text, at);
+      feedbackOf(jid).manual(jid, entry.text, at);
       if (group) spoke.set(jid, (spoke.get(jid) ?? 0) + 1);
     }
     return { ok: true, sent: sends.length };
@@ -657,7 +664,7 @@ export function createBridge({
     const st = store.getState();
     // Held for the owner to send themselves; ownerActive = they are handling the chat right now.
     if (st.shadow || st.paused || ownerActive(jid)) return say([`[no enviado] → ${contact.name}:`, ...bubbles].join('\n\n'));
-    if (!core.isWithinHours(clock.now(), profile)) {
+    if (!inHours(jid)) {
       clock.setTimer(() => deliver(jid, contact, bubbles).catch((e) => say(`ERROR deliver · ${contact.name}\n${e.message}`)), msUntilOpening());
       return;
     }

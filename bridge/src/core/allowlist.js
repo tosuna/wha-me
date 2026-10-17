@@ -11,3 +11,7 @@ export function respondToOf(group, ids = []) {
   const sender = new Set((ids ?? []).filter(Boolean).map(normalize));
   return (group.respondTo ?? []).find((m) => (m.jids ?? []).some((j) => sender.has(normalize(j)))) ?? null;
 }
+
+// A contacts.json `persona` chat is answered by its own lightweight agent: it never feeds the topic memory, the learning
+// pairs or the owner's work flow (handoffs, approvals, jobs).
+export const isPersona = (contact) => !!contact?.persona;

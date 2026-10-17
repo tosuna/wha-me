@@ -109,6 +109,14 @@ An array of chats (see `bridge/contacts.example.json`):
 - `canTriggerImplementation`: whether this contact's requests may start implementation jobs.
 - `type: "group"` and `respondTo: [{ name, jids }]`: in a group, the only members the agent may answer.
 - `autoApprove` (optional): allows the `APPROVE:` directive for this contact (see the `actions` adapter).
+- `persona` (optional): a markdown file (absolute, or relative to the repo root) with the full instructions for this
+  chat, e.g. to answer a casual or personal chat in its own tone, kept apart from your work skill (start from
+  `skills/example-persona.md`). It replaces your skill: the reply run gets only that text and the transcript, no tools,
+  no MCP, no memory, health or code. It may only reply (never hand off, implement or approve), and the chat never feeds the topic memory or
+  `/aprender`. The file must exist at startup.
+- `model` (optional): Claude model id passed as `--model` to this contact's reply runs (e.g. `claude-haiku-5-5`), with or
+  without `persona`.
+- `anyHour` (optional): `true` answers this contact at any time, ignoring `profile.hours`.
 
 ## Configuration reference
 

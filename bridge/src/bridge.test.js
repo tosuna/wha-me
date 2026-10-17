@@ -2150,3 +2150,66 @@ test('reply run gets the chat\'s open requests (same shadow flag), nothing from 
   await s.advance(DELAY);
   assert.deepEqual(s.calls.reply[0].openRequests, [{ id: mine, status: 'nueva', summary: 'reporte de becas por colonia' }]);
 });
+
+// --- persona contacts (contacts.json `persona`): a lightweight agent, walled off from the owner's work voice and memory ---
+const ROBIN = 'robin@s.whatsapp.net';
+const PERSONA = { jid: ROBIN, name: 'Robin', register: 'tu', persona: '/abs/robin.md' };
+const PGRP = 'family@g.us';
+const PGROUP = { jid: PGRP, name: 'Familia', type: 'group', persona: '/abs/robin.md', respondTo: [{ name: 'Ana', jids: ['ana@lid'] }] };
+const personaSetup = (opts = {}) => setup({ contacts: [...contacts, PERSONA, PGROUP], state: { shadow: false }, ...opts });
+
+test('persona: no health check or topic recall; a plain REPLY is sent', async () => {
+  const s = personaSetup();
+  await s.msg(ROBIN, 'hola');
+  await s.advance(DELAY);
+  assert.equal(s.calls.reply.length, 1);
+  assert.deepEqual([s.calls.reply[0].health, s.calls.reply[0].topics], [[], []]);
+  assert.equal(s.calls.recall.length, 0);
+  assert.deepEqual(s.toContact(ROBIN), ['hola']);
+});
+
+test('persona: HANDOFF, IMPLEMENT or APPROVE means no reply: nothing sent, no canned ack, handoff, alert, request or job', async () => {
+  for (const out of [
+    { bubbles: ['ya'], handoff: { type: 'bug', blocking: true, fields: { summary: 's' } }, implement: null },
+    { bubbles: ['ya'], handoff: null, implement: { summary: 'x', spec: 'y' } },
+    { bubbles: ['ya quedo'], handoff: null, implement: null, approve: { folios: ['X-1'] } },
+  ]) {
+    const s = personaSetup({ contacts: [{ ...PERSONA, canTriggerImplementation: true, autoApprove: true }], reply: out, actions: fakeActions() });
+    await s.msg(ROBIN, 'hola');
+    await s.advance(DELAY);
+    assert.deepEqual([s.toContact(ROBIN), s.toSelf(), s.store.getHandoffs(ROBIN), s.alerts, s.store.getJobs()], [[], [], [], [], []]);
+  }
+});
+
+test('persona: never archived nor learned from (messages, replies, manual sends, catch-up)', async () => {
+  const feedback = fakeFeedback();
+  const s = personaSetup({ feedback, memoryChats: [{ jid: ROBIN, name: 'Robin', kind: 'private' }] });
+  await s.msg(ROBIN, 'hola');
+  await s.advance(DELAY);
+  await s.msg(ROBIN, 'yo', { fromMe: true });
+  await s.bridge.sendManual(ROBIN, ['manual']);
+  await s.msg(PGRP, 'hola', { participant: 'ana@lid', participantIds: ['ana@lid'], pushName: null, message: { conversation: 'hola' } });
+  await s.advance(DELAY);
+  await s.advance(ARCHIVE_QUIET_MS);
+  await s.make().catchUpArchive();
+  assert.deepEqual(s.calls.archive, []);
+  assert.deepEqual(feedback.calls, []);
+  assert.deepEqual(s.toContact(ROBIN).length, 2, 'still answered and manual send still works');
+});
+
+test('persona group: the reply quotes the triggering respondTo message', async () => {
+  const s = personaSetup();
+  await s.msg(PGRP, 'hola', { participant: 'ana@lid', participantIds: ['ana@lid'], pushName: null, message: { conversation: 'hola' } });
+  await s.advance(DELAY);
+  const [send] = s.log.filter((l) => l[0] === 'send' && l[1] === PGRP);
+  assert.deepEqual(send[3].quoted.message, { conversation: 'hola' });
+});
+
+test('anyHour: answered out of hours (live); other contacts still deferred', async () => {
+  const s = setup({ contacts: [...contacts, { ...PERSONA, persona: undefined, anyHour: true }], state: { shadow: false }, core: { isWithinHours: () => false } });
+  await s.msg(ROBIN, 'hola');
+  await s.msg(BEA, 'hola');
+  await s.advance(DELAY);
+  assert.deepEqual(s.calls.reply.map((r) => r.contact.name), ['Robin']);
+  assert.deepEqual(s.toContact(ROBIN), ['hola']);
+});
