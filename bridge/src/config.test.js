@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './config.js';
+import { loadConfig, validateContacts } from './config.js';
 
 const EXAMPLE = fileURLToPath(new URL('../../config/example.config.js', import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), 'wa-config-'));
@@ -218,4 +218,19 @@ test('loadConfig: rejects invalid profile.context, pipeline.playbook and workspa
   for (const [file, re] of cases) await assert.rejects(loadConfig(file), re, String(re));
   const ok = await loadConfig(withPlaybook('specRule: null'));
   assert.equal(ok.pipeline.playbook.specRule, null);
+});
+
+test('validateContacts: persona must be an existing file (absolute or repo-relative), model a non-empty string, anyHour a boolean', () => {
+  const persona = join(dir, 'persona.md');
+  writeFileSync(persona, 'You are Robin.');
+  const ok = [{ jid: 'a@s.whatsapp.net', name: 'A' }, { jid: 'g@g.us', name: 'G', type: 'group', persona, model: 'claude-haiku-5-5', anyHour: true }];
+  assert.equal(validateContacts(ok), ok);
+  assert.doesNotThrow(() => validateContacts([{ jid: 'b', name: 'B', persona: 'config/example.config.js' }]));
+  for (const [bad, field] of [
+    [{ persona: join(dir, 'missing.md') }, /contacts\.json G\.persona/],
+    [{ persona: '' }, /G\.persona/],
+    [{ model: '' }, /G\.model/],
+    [{ model: 5 }, /G\.model/],
+    [{ anyHour: 'yes' }, /G\.anyHour/],
+  ]) assert.throws(() => validateContacts([{ jid: 'g@g.us', name: 'G', ...bad }]), field);
 });

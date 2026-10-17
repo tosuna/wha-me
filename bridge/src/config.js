@@ -120,6 +120,19 @@ function validateKnowledge(k, fail, text) {
   if (!urls(k.healthUrls?.pages) || !urls(k.healthUrls?.apis)) fail('knowledge.healthUrls', 'must be { pages: [http(s) URL], apis: [http(s) URL] }');
 }
 
+// contacts.json optional per-contact fields (index.js checks them at startup): persona = markdown file, absolute or relative
+// to the repo root, that must exist; model = Claude model id for that contact's reply runs; anyHour = ignore profile.hours.
+export function validateContacts(contacts) {
+  for (const c of contacts) {
+    const fail = (field, why) => { throw new Error(`invalid contacts.json ${c.name ?? c.jid}.${field}: ${why}`); };
+    const text = (v) => typeof v === 'string' && v.trim() !== '';
+    if (c.persona !== undefined && (!text(c.persona) || !existsSync(resolve(REPO_ROOT, c.persona)))) fail('persona', 'must be an existing file (absolute or relative to the wha-me repo root)');
+    if (c.model !== undefined && !text(c.model)) fail('model', 'must be a non-empty string');
+    if (c.anyHour !== undefined && typeof c.anyHour !== 'boolean') fail('anyHour', 'must be true or false');
+  }
+  return contacts;
+}
+
 // Frozen in place: the config holds functions (worktreesDir, DeployTargets), which structuredClone cannot copy.
 const deepFreeze = (v) => {
   if (v && typeof v === 'object') for (const x of Object.values(Object.freeze(v))) deepFreeze(x);

@@ -3,6 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { claudeRunner, createArchivist } from './archivist.js';
 import { canonicalChat } from './bridge.js';
+import { isPersona } from './core/allowlist.js';
 import { portalToken } from './portal.js';
 import { createRunLog, RUNS_DB } from './run-log.js';
 import { createSecretGuard } from './secrets.js';
@@ -51,10 +52,11 @@ export function parseExport(text, owner) {
 }
 
 // `contacto_0001.txt` -> the contacts.json private chat whose number ends in 0001, under the bridge's canonical key;
-// no match -> `export:<file>` with the header name.
+// no match -> `export:<file>` with the header name; a persona contact -> null (never fed to the memory).
 function chatFor(file, name, contacts) {
   const suffix = basename(file, '.txt').match(/_(\d+)$/)?.[1];
   const c = suffix && contacts.find((x) => x.type !== 'group' && String(x.jid).split('@')[0].endsWith(suffix));
+  if (isPersona(c)) return null;
   return c ? canonicalChat(c.jid, contacts) : { jid: `export:${file}`, name: name || basename(file, '.txt'), kind: 'private' };
 }
 
@@ -75,6 +77,7 @@ export async function seedMemory({ profile, dir, contacts, archivist, runLog, st
     if (seeded.includes(file) && !force) { log(`${file}: ya sembrado, se salta (usa --force para repetir)`); continue; }
     const { name, messages } = parseExport(readFileSync(join(dir, file), 'utf8'), profile.tag);
     const chat = chatFor(file, name, contacts);
+    if (!chat) { log(`${file}: chat con persona, no alimenta la memoria`); continue; }
     // An export not mapped to contacts.json is nobody we know: its contact gets an opaque key, never its header name.
     const contact = chat.jid.startsWith('export:') ? opaqueKey(chat.jid) : contactKey(chat.name);
     const entries = messages.filter((m) => m.at >= since)

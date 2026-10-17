@@ -13,7 +13,7 @@ import { createAgent, skillDir } from './agent.js';
 import { claudeRunner, createArchivist } from './archivist.js';
 import { createBridge } from './bridge.js';
 import { createClashCheck } from './clash.js';
-import { loadConfig } from './config.js';
+import { loadConfig, validateContacts } from './config.js';
 import { createConsoleTrace } from './console-trace.js';
 import { createFeedback } from './feedback.js';
 import { checkHealth } from './health.js';
@@ -52,7 +52,7 @@ const core = { ...activity, ...allowlist, ...debounce, ...delays, ...hours, ...p
 const prodCode = createProdCode({ workspace });
 prodCode.start();
 
-const contacts = JSON.parse(readFileSync(join(BRIDGE, 'contacts.json'), 'utf8'));
+const contacts = validateContacts(JSON.parse(readFileSync(join(BRIDGE, 'contacts.json'), 'utf8')));
 const stateDir = join(BRIDGE, 'state');
 const store = createStore(stateDir, { initialState: core.initialState });
 // The portal token is a secret too: only the /portal self-chat reply may carry it (see bridge.js). So is the GitHub token
