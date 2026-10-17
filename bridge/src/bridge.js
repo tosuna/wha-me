@@ -543,6 +543,25 @@ export function createBridge({
   // activity, the transcript and the learning pairs; the ids are recorded so the fromMe echoes are ignored.
   async function sendManual(jid, bubbles) {
     if (bubbles.some(leaks)) return { ok: false, reason: 'un mensaje coincide con un patrón de secreto; no se envió nada' };
+    return sendAsOwner(jid, bubbles.map((text) => [{ text }, () => wa.sendText(jid, text)]));
+  }
+
+  // A portal sticker: the same manual send. The text stays '[sticker]' (how wa.js labels one) for the agent and the learning
+  // pairs; `sticker` (its store id, stickers.js) is extra, for the portal's chat view only. An image: no text secret guard.
+  const sendManualSticker = (jid, buffer, sticker) => sendAsOwner(jid, [[{ text: '[sticker]', sticker }, () => wa.sendSticker(jid, buffer)]]);
+
+  // sends: [{ text, sticker? } recorded in the transcript, () => message id].
+  async function sendAsOwner(jid, sends) {
+    // The self-chat (portal «Tú», e.g. to try a sticker): just sent, no contact activity. The ids are recorded so the echoes are
+    // never read as the owner's commands (handleMessage skips sent ids before parsing). Only these portal sends land in the
+    // self-chat's history, read by the portal alone: the self-chat is never a reply, archive or memory chat.
+    if (jid === selfJid) {
+      for (const [entry, send] of sends) {
+        store.addSentId(await send());
+        store.appendTranscript(jid, { author: OWNER, ...entry, at: clock.now().getTime() });
+      }
+      return { ok: true, sent: sends.length };
+    }
     const group = contactOf(jid)?.type === 'group';
     debouncer.cancel(jid);
     store.clearPending(jid);
@@ -550,16 +569,16 @@ export function createBridge({
     const keys = unread.get(jid);
     unread.delete(jid);
     if (keys?.length) await wa.markRead(keys);
-    for (const text of bubbles) {
+    for (const [entry, send] of sends) {
       store.setLastManualFromMeAt(jid, clock.now().getTime()); // set before sending: a run in flight is discarded
-      const id = await wa.sendText(jid, text);
+      const id = await send();
       const at = clock.now().getTime();
       store.addSentId(id);
-      append(jid, { author: OWNER, text, at });
-      feedback.manual(jid, text, at);
+      append(jid, { author: OWNER, ...entry, at });
+      feedback.manual(jid, entry.text, at);
       if (group) spoke.set(jid, (spoke.get(jid) ?? 0) + 1);
     }
-    return { ok: true, sent: bubbles.length };
+    return { ok: true, sent: sends.length };
   }
 
   // Portal "Pedir info": a normal reply run now, whose prompt carries the owner's trusted note; it goes through reply() and
@@ -645,5 +664,5 @@ export function createBridge({
     await sendBubbles(jid, bubbles);
   }
 
-  return { handleMessage, processQueue, restorePending, sendManual, askContact, say, catchUpArchive };
+  return { handleMessage, processQueue, restorePending, sendManual, sendManualSticker, askContact, say, catchUpArchive };
 }

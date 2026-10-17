@@ -214,6 +214,8 @@ export async function connectWa({
     onMessage: (cb) => { listeners.push(cb); },
     // quoted: a received message ({ key, message }) shown as the reply's quote.
     sendText: async (jid, text, { quoted } = {}) => (await sock.sendMessage(jid, { text }, quoted ? { quoted } : undefined)).key.id,
+    // buffer: a webp file, re-uploaded by Baileys.
+    sendSticker: async (jid, buffer) => (await sock.sendMessage(jid, { sticker: buffer })).key.id,
     fetchGroups: () => sock.groupFetchAllParticipating(),
     sendPresence: (jid, type) => sock.sendPresenceUpdate(type, jid),
     markRead: (keys) => sock.readMessages(keys),

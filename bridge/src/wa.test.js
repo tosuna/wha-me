@@ -496,3 +496,15 @@ test('sendText quotes a message when asked; fetchGroups returns the participatin
   assert.deepEqual(sent, [[GRP, { text: 'va' }, { quoted }], [BEA, { text: 'hola' }, undefined]]);
   assert.deepEqual(await api.fetchGroups(), groups);
 });
+
+test('sendSticker sends the webp buffer as a sticker and returns the message id', async () => {
+  const sent = [];
+  const w = fakeWa();
+  await tick();
+  Object.assign(w.last(), { sendMessage: async (jid, content) => { sent.push([jid, content]); return { key: { id: 'K1' } }; } });
+  w.emit({ connection: 'open' });
+  const api = await w.p;
+  const webp = Buffer.from('RIFF\0\0\0\0WEBP');
+  assert.equal(await api.sendSticker(BEA, webp), 'K1');
+  assert.deepEqual(sent, [[BEA, { sticker: webp }]]);
+});

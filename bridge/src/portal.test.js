@@ -399,6 +399,136 @@ test('without a sendMessage callback (npm run portal) sending is 405', async (t)
   assert.equal((await post(port, { cookie: sessions.get(port), host: local, origin: `http://${local}` })).status, 405);
 });
 
+// --- stickers (stickers.js store, sent with wa.sendSticker) ---
+
+const STICKER = Buffer.alloc(32, 7).toString('base64url');
+const STICKER_WEBP = Buffer.from('RIFF\0\0\0\0WEBPfake');
+const fakeStickers = {
+  list: () => ({ available: true, favorites: [{ id: STICKER, emojis: ['😀'] }], recents: [], packs: [] }),
+  file: (id) => (id === STICKER ? STICKER_WEBP : null),
+};
+
+async function setupStickers(t, { sendSticker = async () => 'msg-id', selfJid } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'wa-portal-'));
+  const stateDir = join(dir, 'state');
+  mkdirSync(stateDir);
+  writeFileSync(join(dir, 'contacts.json'), JSON.stringify([{ jid: BEA, name: 'Bea', register: 'tu', tenant: 'demo' }]));
+  const calls = [];
+  const server = await startPortal({ profile: PROFILE, stateDir, contactsFile: join(dir, 'contacts.json'), port: 0, stickers: fakeStickers, selfJid,
+    sendSticker: sendSticker && (async (...a) => { calls.push(a); return sendSticker(...a); }),
+    sendMessage: async (...a) => { calls.push(a); return { ok: true, sent: a[1].length }; } });
+  t.after(() => server.close());
+  return { port: server.address().port, calls, cookie: sessions.get(server.address().port) };
+}
+const postSticker = (port, { cookie, origin = `https://${TUNNEL}`, type = 'application/json', jid = BEA, body = { id: STICKER } } = {}) => req(port, {
+  method: 'POST', path: `/api/chats/${encodeURIComponent(jid)}/sticker`,
+  headers: { ...(cookie ? { cookie } : {}), ...(origin ? { origin } : {}), ...(type ? { 'content-type': type } : {}) },
+  body: typeof body === 'string' ? body : JSON.stringify(body),
+});
+
+test('/api/stickers lists the store; /api/stickers/<id>.webp serves it cached; unknown or traversal ids 404', async (t) => {
+  const { port } = await setupStickers(t);
+  assert.deepEqual(JSON.parse((await get(port, '/api/stickers')).body), fakeStickers.list());
+  const img = await req(port, { path: `/api/stickers/${STICKER}.webp`, headers: { cookie: sessions.get(port) } });
+  assert.equal(img.status, 200);
+  assert.equal(img.headers['content-type'], 'image/webp');
+  assert.match(img.headers['cache-control'], /max-age/);
+  assert.equal(img.body, STICKER_WEBP.toString());
+  for (const path of [`/api/stickers/${Buffer.alloc(32, 1).toString('base64url')}.webp`, '/api/stickers/..%2F..%2Fsecret.webp', `/api/stickers/${STICKER}`]) {
+    assert.equal((await get(port, path)).status, 404, path);
+  }
+  assert.equal((await req(port, { path: `/api/stickers/${STICKER}.webp` })).status, 401, 'no session');
+});
+
+test('sticker send: CSRF, jid and id checks; happy path sends the webp buffer to the chat', async (t) => {
+  const { port, calls, cookie } = await setupStickers(t);
+  assert.equal((await postSticker(port)).status, 401, 'no cookie');
+  assert.equal((await postSticker(port, { cookie, origin: 'https://evil.example' })).status, 403, 'foreign Origin');
+  assert.ok([403, 415].includes((await postSticker(port, { cookie, type: 'text/plain' })).status), 'text/plain');
+  assert.equal((await postSticker(port, { cookie, jid: 'nadie@s.whatsapp.net' })).status, 404, 'unknown jid');
+  for (const body of [{}, { id: 3 }, { id: '../x' }, 'no json']) assert.equal((await postSticker(port, { cookie, body })).status, 400, JSON.stringify(body));
+  assert.equal((await postSticker(port, { cookie, body: { id: Buffer.alloc(32, 1).toString('base64url') } })).status, 404, 'unknown sticker');
+  assert.equal(calls.length, 0);
+  const r = await postSticker(port, { cookie });
+  assert.deepEqual([r.status, JSON.parse(r.body)], [200, { ok: true }]);
+  assert.deepEqual(calls, [[BEA, STICKER_WEBP, STICKER]], 'the sticker id goes along to be recorded');
+});
+
+test('sticker send: a WhatsApp error is 502; without sendSticker (npm run portal) it is 405', async (t) => {
+  const a = await setupStickers(t, { sendSticker: async () => { throw new Error('socket cerrado'); } });
+  const ra = await postSticker(a.port, { cookie: a.cookie });
+  assert.deepEqual([ra.status, JSON.parse(ra.body).error], [502, 'socket cerrado']);
+  const b = await setupStickers(t, { sendSticker: null });
+  assert.equal((await postSticker(b.port, { cookie: b.cookie })).status, 405);
+});
+
+const SELF = '5210000000009@s.whatsapp.net';
+
+test('self-chat «Tú»: listed first and opens once WhatsApp is up; text and stickers to it are accepted, other non-contacts still 404', async (t) => {
+  let self = null;
+  const { port, calls, cookie } = await setupStickers(t, { selfJid: () => self });
+  const chats = async () => JSON.parse((await get(port, '/api/chats')).body).chats;
+  assert.deepEqual((await chats()).map((c) => c.jid), [], 'not connected: no «Tú»');
+  assert.equal((await postSticker(port, { cookie, jid: SELF })).status, 404, 'not connected: self not accepted');
+  self = SELF;
+  assert.deepEqual((await chats()).map((c) => [c.jid, c.name, c.self]), [[SELF, 'Tú', true]]);
+  assert.equal((await get(port, `/api/chats/${encodeURIComponent(SELF)}`)).status, 200);
+  assert.equal((await postSticker(port, { cookie, jid: SELF })).status, 200);
+  const text = await post(port, { cookie, jid: SELF, body: { bubbles: ['prueba'] } });
+  assert.equal(text.status, 200);
+  assert.deepEqual(calls, [[SELF, STICKER_WEBP, STICKER], [SELF, ['prueba']]]);
+  assert.equal((await postSticker(port, { cookie, jid: 'nadie@s.whatsapp.net' })).status, 404);
+  assert.equal((await post(port, { cookie, jid: 'nadie@s.whatsapp.net' })).status, 404);
+  assert.equal(calls.length, 2);
+});
+
+test('chat API returns the sticker id of portal-sent stickers, for contacts and «Tú»', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'wa-portal-'));
+  const stateDir = join(dir, 'state');
+  mkdirSync(join(stateDir, 'history'), { recursive: true });
+  const line = (e) => JSON.stringify(e) + '\n';
+  writeFileSync(historyFile(stateDir, BEA), line({ author: 'OWNER', text: '[sticker]', sticker: STICKER, at: 1 }) + line({ author: 'OWNER', text: '[sticker]', at: 2 }));
+  writeFileSync(historyFile(stateDir, SELF), line({ author: 'OWNER', text: 'prueba', at: 3 }) + line({ author: 'OWNER', text: '[sticker]', sticker: STICKER, at: 4 }));
+  writeFileSync(join(dir, 'contacts.json'), JSON.stringify([{ jid: BEA, name: 'Bea' }]));
+  const server = await startPortal({ profile: PROFILE, stateDir, contactsFile: join(dir, 'contacts.json'), port: 0, selfJid: () => SELF });
+  t.after(() => server.close());
+  const port = server.address().port;
+  const timeline = async (jid) => JSON.parse((await get(port, `/api/chats/${encodeURIComponent(jid)}`)).body).timeline.map((e) => [e.text, e.sticker]);
+  assert.deepEqual(await timeline(BEA), [['[sticker]', STICKER], ['[sticker]', undefined]]);
+  assert.deepEqual(await timeline(SELF), [['prueba', undefined], ['[sticker]', STICKER]]);
+});
+
+test('page: a sticker image src is only ever /api/stickers/<checked id>.webp, lazy, with a [sticker] text fallback', async (t) => {
+  const port = await setupWa(t, null);
+  const { body } = await get(port, '/');
+  const srcs = body.match(/\w+\.src\s*=.*api\/stickers.*/g) ?? [];
+  assert.deepEqual(srcs, ["img.src = '/api/stickers/' + id + '.webp';"], 'one sticker src assignment, in stickerImg');
+  const fn = body.slice(body.indexOf('function stickerImg('), body.indexOf(srcs[0]));
+  assert.match(fn, /if \(!STICKER_ID\.test\(id\)\) return null;/, 'the id is checked before src');
+  assert.ok(body.includes("const STICKER_ID = /^[A-Za-z0-9_-]{43}$/;"));
+  assert.match(body, /loading = 'lazy'/);
+  assert.match(body, /onerror/);
+  assert.match(body, /stickerImg\(e\.sticker, /, 'chat bubbles render the recorded sticker');
+});
+
+test('self-chat «Tú» sorts before the contacts', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'wa-portal-'));
+  const stateDir = join(dir, 'state');
+  mkdirSync(join(stateDir, 'history'), { recursive: true });
+  writeFileSync(historyFile(stateDir, BEA), JSON.stringify({ author: 'CONTACTO', text: 'hola', at: Date.now() }) + '\n');
+  writeFileSync(join(dir, 'contacts.json'), JSON.stringify([{ jid: BEA, name: 'Bea' }]));
+  const server = await startPortal({ profile: PROFILE, stateDir, contactsFile: join(dir, 'contacts.json'), port: 0, selfJid: () => SELF });
+  t.after(() => server.close());
+  assert.deepEqual(JSON.parse((await get(server.address().port, '/api/chats')).body).chats.map((c) => c.name), ['Tú', 'Bea']);
+});
+
+test('page has the sticker picker (Favoritos, Recientes, Paquetes), still textContent only', async (t) => {
+  const port = await setupWa(t, null);
+  const { body } = await get(port, '/');
+  for (const s of ['/api/stickers', '/sticker', 'Favoritos', 'Recientes', 'Paquetes', 'b.self']) assert.ok(body.includes(s), s);
+  assert.doesNotMatch(body, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+});
+
 test('/api/chats/:jid/draft: latest real shadow or discarded draft of the chat; 404 when none', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'wa-portal-'));
   const stateDir = join(dir, 'state');
