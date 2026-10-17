@@ -219,6 +219,19 @@
   #composer-msg { font-size: .875rem; color: var(--muted); }
   #composer-msg.err { color: var(--red); font-weight: 500; }
   #composer .send { margin-left: auto; display: flex; gap: var(--s2); }
+  #stickers { display: flex; flex-direction: column; gap: var(--s2); }
+  #stickers[hidden] { display: none; }
+  #sticker-grid { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: var(--s3); }
+  #sticker-grid h3 { margin: 0; font-size: .875rem; font-weight: 600; color: var(--muted); }
+  #sticker-grid .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: var(--s1); }
+  #sticker-grid .grid button { aspect-ratio: 1; padding: var(--s1); border: 0; border-radius: var(--r-md); background: transparent; cursor: pointer;
+    transition: background-color .15s ease-out; }
+  #sticker-grid .grid button:hover { background: var(--surface-2); }
+  #sticker-grid .grid button:disabled { opacity: .55; cursor: default; }
+  #sticker-grid img { width: 100%; height: 100%; object-fit: contain; }
+  #sticker-grid .none { color: var(--faint); font-style: italic; margin: 0; }
+  .bubble.sticker { background: transparent; box-shadow: none; }
+  .bubble.sticker img { display: block; width: 120px; height: 120px; object-fit: contain; }
 
   /* --- Peticiones --- */
   .filters { display: flex; gap: var(--s1); flex-wrap: wrap; }
@@ -675,11 +688,15 @@
     <div id="tabs" role="tablist" hidden><button role="tab" data-tab="chat">Historial</button><button role="tab" data-tab="runs">Agentes</button></div>
     <div id="msgs"></div>
     <form id="composer" hidden>
+      <div id="stickers" hidden>
+        <div class="seg" id="sticker-tabs"><button type="button" data-st="favorites" aria-pressed="true">Favoritos</button><button type="button" data-st="recents" aria-pressed="false">Recientes</button><button type="button" data-st="packs" aria-pressed="false">Paquetes</button></div>
+        <div id="sticker-grid"></div>
+      </div>
       <textarea id="draft" rows="1" placeholder="Escribe tu respuesta" aria-label="Tu respuesta" aria-describedby="composer-tip composer-msg"></textarea>
       <div class="actions">
         <span class="tip" id="composer-tip">Una línea con solo <code>---</code> separa mensajes.</span>
         <span id="composer-msg" role="status" aria-live="polite"></span>
-        <div class="send"><button type="button" class="btn" id="use-draft">Usar borrador</button><button type="submit" class="btn primary" id="send">Enviar</button></div>
+        <div class="send"><button type="button" class="btn" id="sticker-btn" aria-expanded="false" aria-controls="stickers">Stickers</button><button type="button" class="btn" id="use-draft">Usar borrador</button><button type="submit" class="btn primary" id="send">Enviar</button></div>
       </div>
     </form>
     <form id="req-bar" hidden>
@@ -697,6 +714,17 @@ function el(tag, cls, text) {
   if (cls) e.className = cls;
   if (text != null) e.textContent = String(text);
   return e;
+}
+// A sticker from the store (stickers.js): the only src this page sets, and only for an id that passes this check.
+const STICKER_ID = /^[A-Za-z0-9_-]{43}$/;
+function stickerImg(id, fallback) {
+  if (!STICKER_ID.test(id)) return null;
+  const img = el('img');
+  img.loading = 'lazy';
+  img.alt = '';
+  if (fallback) img.onerror = () => img.replaceWith(document.createTextNode(fallback));
+  img.src = '/api/stickers/' + id + '.webp';
+  return img;
 }
 // Authored icons (one 1.8 stroke set), built with createElementNS.
 const ICONS = {
@@ -825,7 +853,7 @@ function renderState(state, jobs) {
 // --- list ---
 function visibleChats() {
   const q = $('search').value.trim().toLowerCase();
-  let chats = view === 'pending' ? lastChats.filter((c) => c.needsIntervention) : [...lastChats].sort((a, b) => b.lastActivity - a.lastActivity);
+  let chats = view === 'pending' ? lastChats.filter((c) => c.needsIntervention) : [...lastChats].sort((a, b) => (b.self === true) - (a.self === true) || b.lastActivity - a.lastActivity); // «Tú» first
   if (q) chats = chats.filter((c) => [c.name, TENANTS[c.tenant], c.lastMessage && c.lastMessage.text].some((s) => s && s.toLowerCase().includes(q)));
   return chats;
 }
@@ -1004,9 +1032,11 @@ function timelineItem(e, open) {
   }
   // Group messages carry the member's name as author.
   const out = e.author === '__OWNER_TAG__';
-  const b = el('div', 'bubble' + (out ? ' out' : ''));
+  // A sticker sent from the portal carries its store id; older entries (or a failed image) show the text.
+  const img = stickerImg(e.sticker, e.text || '[sticker]');
+  const b = el('div', 'bubble' + (out ? ' out' : '') + (img ? ' sticker' : ''));
   if (!out && e.author !== 'CONTACTO') b.append(el('span', 'author', e.author));
-  b.append(document.createTextNode(e.text ?? ''), el('span', 'time', clock(e.at)));
+  b.append(img || document.createTextNode(e.text ?? ''), el('span', 'time', clock(e.at)));
   return b;
 }
 
@@ -1363,6 +1393,75 @@ $('composer').onsubmit = async (ev) => {
     $('send').disabled = false;
   }
 };
+
+// --- Stickers: WhatsApp Desktop's favorites, recents and packs (GET /api/stickers); a click sends it (POST /api/chats/:jid/sticker) ---
+let stickerList = null;
+let stickerTab = 'favorites';
+function stickerGrid(stickers) {
+  const g = el('div', 'grid');
+  for (const s of stickers) {
+    const b = el('button');
+    b.type = 'button';
+    b.title = s.emojis.join(' ') || 'Sticker';
+    b.setAttribute('aria-label', 'Enviar sticker ' + (s.emojis.join(' ') || ''));
+    const img = stickerImg(s.id);
+    if (!img) continue;
+    b.append(img);
+    b.onclick = () => sendSticker(s.id, b);
+    g.append(b);
+  }
+  return g;
+}
+function renderStickers() {
+  for (const b of $('sticker-tabs').children) b.setAttribute('aria-pressed', String(b.dataset.st === stickerTab));
+  const box = $('sticker-grid');
+  box.replaceChildren();
+  if (!stickerList) return box.append(el('p', 'none', 'Cargando…'));
+  if (!stickerList.available) return box.append(el('p', 'none', 'No se encontraron los stickers de WhatsApp Desktop en esta Mac.'));
+  if (stickerTab === 'packs') {
+    if (!stickerList.packs.length) return box.append(el('p', 'none', 'Sin paquetes descargados.'));
+    for (const p of stickerList.packs) box.append(el('h3', '', p.name), stickerGrid(p.stickers));
+    return;
+  }
+  const list = stickerList[stickerTab];
+  if (!list.length) return box.append(el('p', 'none', stickerTab === 'favorites' ? 'Sin favoritos.' : 'Sin recientes.'));
+  box.append(stickerGrid(list));
+}
+$('sticker-tabs').onclick = (ev) => {
+  const b = ev.target.closest('button');
+  if (b) { stickerTab = b.dataset.st; renderStickers(); }
+};
+$('sticker-btn').onclick = async () => {
+  const open = $('stickers').hidden;
+  $('stickers').hidden = !open;
+  $('sticker-btn').setAttribute('aria-expanded', String(open));
+  if (!open || stickerList) return renderStickers();
+  renderStickers();
+  try {
+    const r = await fetch('/api/stickers');
+    if (!r.ok) throw new Error('error ' + r.status);
+    stickerList = await r.json();
+    renderStickers();
+  } catch (e) {
+    $('sticker-grid').replaceChildren(el('p', 'none', 'No se pudieron cargar los stickers (' + e.message + ').'));
+  }
+};
+async function sendSticker(id, button) {
+  const jid = selected;
+  button.disabled = true;
+  note('Enviando sticker…');
+  try {
+    const r = await fetch('/api/chats/' + encodeURIComponent(jid) + '/sticker', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
+    const v = await r.json().catch(() => ({}));
+    if (!r.ok) return note('No se envió el sticker: ' + (v.error || 'error ' + r.status) + '.', true);
+    note('Sticker enviado.');
+    refresh();
+  } catch (e) {
+    note('No se pudo conectar con el portal (' + e.message + ').', true);
+  } finally {
+    button.disabled = false;
+  }
+}
 
 // --- Peticiones: feature requests from feature-request handoffs (state/agent-runs.db, see requests.js) ---
 // Tone: red/amber only where __OWNER_NAME__ has to act (decide, retry, deliver); teal for work in progress.

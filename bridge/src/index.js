@@ -90,6 +90,10 @@ const sendMessage = async (jid, bubbles) => {
   if (!bridge) throw new Error('WhatsApp todavía no está conectado');
   return bridge.sendManual(jid, bubbles);
 };
+const sendSticker = async (jid, buffer, id) => {
+  if (!bridge) throw new Error('WhatsApp todavía no está conectado');
+  return bridge.sendManualSticker(jid, buffer, id);
+};
 // Peticiones pipeline (pipeline.js), created once the bridge can post to the self-chat; behind PIPELINE_ENABLED (Ajustes).
 let pipeline = null;
 const stageLock = createStageLock();
@@ -97,7 +101,7 @@ const askContact = (jid, note) => {
   if (!bridge) throw new Error('WhatsApp todavía no está conectado');
   return bridge.askContact(jid, note);
 };
-const portal = await startPortal({ profile, knowledge, pipeline: pipelineConfig, stateDir, requestsDir: workspace.requestsDir, contactsFile: join(BRIDGE, 'contacts.json'), port, sendMessage, requests, askContact, settings, leaks,
+const portal = await startPortal({ profile, knowledge, pipeline: pipelineConfig, stateDir, requestsDir: workspace.requestsDir, contactsFile: join(BRIDGE, 'contacts.json'), port, sendMessage, sendSticker, selfJid: () => (bridge ? wa.selfJid : null), requests, askContact, settings, leaks,
   onRequestAction: (id, action) => pipeline?.onAction(id, action), topics, memoryChats, seenChats })
   .catch((e) => console.error(`portal did not start (${e.message}); the QR is still printed here.`));
 const url = `http://127.0.0.1:${portal?.address().port ?? port}`;

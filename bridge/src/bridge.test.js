@@ -95,6 +95,7 @@ function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = 
     markRead: async (keys) => { log.push(['read', keys.length]); },
     sendPresence: async (jid, type) => { log.push(['presence', jid, type]); },
     sendText: async (jid, text, opts) => { log.push(['send', jid, text, ...(opts ? [opts] : [])]); return `B${++sent}`; },
+    sendSticker: async (jid, buffer) => { log.push(['sticker', jid, buffer]); return `B${++sent}`; },
     fetchGroups: async () => { if (groups instanceof Error) throw groups; return groups; },
   };
   const calls = { reply: [], job: [], jobSim: [], recall: [], archive: [] };
@@ -1967,6 +1968,59 @@ test('sendManual: sent like Alex typing: OWNER transcript, Alex active, pending 
   assert.deepEqual(manual(), [[BEA, 'uno'], [BEA, 'dos']]);
   await s.advance(DELAY);
   assert.equal(s.calls.reply.length, 0);
+});
+
+test('sendManualSticker: like a manual text: pending reply cancelled, Alex active, [sticker] in the transcript and feedback; no text guard', async () => {
+  const feedback = fakeFeedback();
+  const s = setup({ feedback, state: { shadow: false } });
+  await s.msg(BEA, 'hola');
+  assert.notEqual(s.store.getPending()[BEA], undefined);
+  const webp = Buffer.from('RIFF\0\0\0\0WEBP');
+  const id = Buffer.alloc(32, 7).toString('base64url');
+  assert.deepEqual(await s.bridge.sendManualSticker(BEA, webp, id), { ok: true, sent: 1 });
+  assert.deepEqual(s.log.filter((l) => l[0] === 'sticker'), [['sticker', BEA, webp]]);
+  assert.ok(s.log.some((l) => l[0] === 'read'), 'the contact message is marked read');
+  // The agent's text stays [sticker]; the sticker id rides along for the portal only.
+  assert.deepEqual(s.store.getTranscript(BEA).map((e) => [e.author, e.text, e.sticker]), [['CONTACTO', 'hola', undefined], ['OWNER', '[sticker]', id]]);
+  assert.deepEqual(s.store.getHistory(BEA).at(-1).sticker, id);
+  assert.equal(s.store.getLastManualFromMeAt(BEA), s.now());
+  assert.equal(s.store.getPending()[BEA], undefined);
+  assert.deepEqual(feedback.calls.filter((c) => c[0] === 'manual').map((c) => c.slice(1, 3)), [[BEA, '[sticker]']]);
+  // Baileys' own-send echo is ignored like a text's.
+  await s.msg(BEA, '[sticker]', { fromMe: true, id: 'B1' });
+  assert.equal(s.store.getTranscript(BEA).length, 2);
+  await s.advance(DELAY);
+  assert.equal(s.calls.reply.length, 0);
+});
+
+test('portal sends to the self-chat: straight to WhatsApp, never a command, no owner activity, echoes ignored; text still guarded', async () => {
+  const feedback = fakeFeedback();
+  const s = setup({ feedback, state: { shadow: false } });
+  await s.msg(BEA, 'hola');
+  const pending = s.store.getPending()[BEA];
+  assert.notEqual(pending, undefined);
+  assert.deepEqual(await s.bridge.sendManual(SELF, ['/pausa']), { ok: true, sent: 1 });
+  const webp = Buffer.from('RIFF\0\0\0\0WEBP');
+  const id = Buffer.alloc(32, 7).toString('base64url');
+  assert.deepEqual(await s.bridge.sendManualSticker(SELF, webp, id), { ok: true, sent: 1 });
+  assert.deepEqual(s.toSelf(), ['/pausa'], 'sent, and nothing answered it');
+  assert.deepEqual(s.log.filter((l) => l[0] === 'sticker'), [['sticker', SELF, webp]]);
+  assert.equal(s.store.getState().paused, false, 'not run as a command');
+  assert.deepEqual(s.store.getPending()[BEA], pending, "another chat's pending reply is untouched");
+  assert.equal(s.store.getLastManualFromMeAt(SELF), null);
+  // Only the portal's own sends are kept for the «Tú» view, read by the portal alone (the self-chat is never a reply or archive chat).
+  assert.deepEqual(s.store.getHistory(SELF).map((e) => [e.author, e.text, e.sticker]), [['OWNER', '/pausa', undefined], ['OWNER', '[sticker]', id]]);
+  assert.equal(s.log.some((l) => l[0] === 'read'), false);
+  assert.deepEqual(feedback.calls.filter((c) => c[0] === 'manual'), []);
+  // The echoes of our own sends (ids recorded) are not read as the owner's commands either.
+  await s.msg(SELF, '/pausa', { fromMe: true, id: 'B1' });
+  await s.msg(SELF, '[sticker]', { fromMe: true, id: 'B2' });
+  await s.msg(SELF, '/sigue', { fromMe: true, id: 'X9' }); // a real command typed on the phone: run, not recorded for «Tú»
+  assert.equal(s.store.getHistory(SELF).length, 2);
+  assert.equal(s.store.getState().paused, false);
+  const r = await s.bridge.sendManual(SELF, [`token ${NPM_TOKEN}`]);
+  assert.equal(r.ok, false);
+  assert.equal(s.store.getHistory(SELF).length, 2);
 });
 
 test('sendManual: a secret in any bubble refuses the whole send, nothing reaches WhatsApp or the transcript', async () => {
