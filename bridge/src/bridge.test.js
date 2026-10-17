@@ -2213,3 +2213,22 @@ test('anyHour: answered out of hours (live); other contacts still deferred', asy
   assert.deepEqual(s.calls.reply.map((r) => r.contact.name), ['Robin']);
   assert.deepEqual(s.toContact(ROBIN), ['hola']);
 });
+
+test('live: replied for real under global shadow; other contacts still drafted', async () => {
+  const s = setup({ contacts: [...contacts, { ...PERSONA, persona: undefined, live: true }], state: { shadow: true } });
+  await s.msg(ROBIN, 'hola');
+  await s.msg(BEA, 'hola');
+  await s.advance(DELAY);
+  assert.deepEqual(s.toContact(ROBIN), ['hola']);
+  assert.deepEqual(s.toContact(BEA), []);
+  assert.ok(s.toSelf().some((t) => t.startsWith('[sombra]')), 'Bea drafted');
+});
+
+test('live: hours apply again unless anyHour', async () => {
+  for (const [anyHour, sent] of [[false, []], [true, ['hola']]]) {
+    const s = setup({ contacts: [...contacts, { ...PERSONA, persona: undefined, live: true, anyHour }], state: { shadow: true }, core: { isWithinHours: () => false } });
+    await s.msg(ROBIN, 'hola');
+    await s.advance(DELAY);
+    assert.deepEqual(s.toContact(ROBIN), sent);
+  }
+});

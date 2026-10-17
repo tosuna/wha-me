@@ -33,6 +33,7 @@
     "persona": "skills/example-persona.md",
     "model": "claude-haiku-5-5",
     "anyHour": true,
+    "live": true,
     "respondTo": [
       {
         "name": "Contacto D",

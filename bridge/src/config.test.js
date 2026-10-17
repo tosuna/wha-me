@@ -220,10 +220,10 @@ test('loadConfig: rejects invalid profile.context, pipeline.playbook and workspa
   assert.equal(ok.pipeline.playbook.specRule, null);
 });
 
-test('validateContacts: persona must be an existing file (absolute or repo-relative), model a non-empty string, anyHour a boolean', () => {
+test('validateContacts: persona must be an existing file (absolute or repo-relative), model a non-empty string, anyHour and live booleans', () => {
   const persona = join(dir, 'persona.md');
   writeFileSync(persona, 'You are Robin.');
-  const ok = [{ jid: 'a@s.whatsapp.net', name: 'A' }, { jid: 'g@g.us', name: 'G', type: 'group', persona, model: 'claude-haiku-5-5', anyHour: true }];
+  const ok = [{ jid: 'a@s.whatsapp.net', name: 'A' }, { jid: 'g@g.us', name: 'G', type: 'group', persona, model: 'claude-haiku-5-5', anyHour: true, live: true }];
   assert.equal(validateContacts(ok), ok);
   assert.doesNotThrow(() => validateContacts([{ jid: 'b', name: 'B', persona: 'config/example.config.js' }]));
   for (const [bad, field] of [
@@ -232,5 +232,6 @@ test('validateContacts: persona must be an existing file (absolute or repo-relat
     [{ model: '' }, /G\.model/],
     [{ model: 5 }, /G\.model/],
     [{ anyHour: 'yes' }, /G\.anyHour/],
+    [{ live: 1 }, /G\.live/],
   ]) assert.throws(() => validateContacts([{ jid: 'g@g.us', name: 'G', ...bad }]), field);
 });

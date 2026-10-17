@@ -140,6 +140,8 @@ export function createBridge({
   const feedbackOf = (jid) => (isPersona(contactOf(jid)) ? noFeedback : feedback);
   // contacts.json `anyHour: true`: that chat ignores profile.hours.
   const inHours = (jid) => !!contactOf(jid)?.anyHour || core.isWithinHours(clock.now(), profile);
+  // contacts.json `live: true`: that chat runs as if shadow were off (trial one chat live while the rest stays in shadow).
+  const shadowFor = (jid) => !!store.getState().shadow && !contactOf(jid)?.live;
   const jidsOf = (chat) => (chat.kind === 'group' || !contactOf(chat.jid) ? [chat.jid]
     : people.filter((p) => contactKey(p.name) === contactKey(chat.name)).map((p) => p.jid));
   const alertIncident = (job, contact, reason) => notify({
@@ -148,7 +150,7 @@ export function createBridge({
     key: `incident:${job.jid}:${job.implement.summary}`,
   });
   // Shadow is for watching the agent: no human-like delay and no business-hours wait (nothing reaches the contact).
-  const replyDelay = () => (store.getState().shadow ? core.shadowDelayMs() : core.replyDelayMs());
+  const replyDelay = (jid) => (shadowFor(jid) ? core.shadowDelayMs() : core.replyDelayMs());
   const ownerActive = (jid) => core.isOwnerActive(store.getLastManualFromMeAt(jid), clock.now());
 
   // --- topic memory ---
@@ -184,7 +186,7 @@ export function createBridge({
   function remember(jid, text) {
     const chat = chatOf(jid);
     if (!chat) return;
-    const entry = { author: 'BRIDGE', name: 'bridge', person: 'bridge', text: `${store.getState().shadow ? SHADOW_EVENT : ''}[evento] ${text}`, at: clock.now().getTime() };
+    const entry = { author: 'BRIDGE', name: 'bridge', person: 'bridge', text: `${shadowFor(jid) ? SHADOW_EVENT : ''}[evento] ${text}`, at: clock.now().getTime() };
     events.set(chat.jid, [...(events.get(chat.jid) ?? []), entry]);
     touchArchive(jid);
   }
@@ -296,7 +298,7 @@ export function createBridge({
     feedbackOf(jid).contact(jid, msg.timestamp);
     asked.set(jid, (asked.get(jid) ?? 0) + 1);
     unread.set(jid, [...(unread.get(jid) ?? []), msg.key]);
-    schedule(jid, replyDelay());
+    schedule(jid, replyDelay(jid));
   }
 
   // pushName is set by the member: never let it pose as one of the reserved authors.
@@ -339,7 +341,7 @@ export function createBridge({
     asked.set(jid, (asked.get(jid) ?? 0) + 1);
     unread.set(jid, [...(unread.get(jid) ?? []), msg.key]);
     triggers.set(jid, { key: msg.key, message: msg.message });
-    schedule(jid, replyDelay());
+    schedule(jid, replyDelay(jid));
   }
 
   // One pending reply per chat (debounce, next opening, or retry), persisted in the store.
@@ -377,9 +379,9 @@ export function createBridge({
 
   async function reply(jid) {
     if (store.getState().paused) return;
-    if (!store.getState().shadow && !inHours(jid)) return defer(jid);
+    if (!shadowFor(jid) && !inHours(jid)) return defer(jid);
     if (ownerActive(jid)) return;
-    if (busy.has(jid)) return schedule(jid, replyDelay());
+    if (busy.has(jid)) return schedule(jid, replyDelay(jid));
 
     const contact = contactOf(jid);
     const group = contact.type === 'group';
@@ -407,7 +409,7 @@ export function createBridge({
       const onEvent = (e) => { t.event(e); run.event(e); };
       const note = notes.get(jid);
       notes.delete(jid);
-      const openRequests = requests.open(jid, { shadow: !!store.getState().shadow });
+      const openRequests = requests.open(jid, { shadow: shadowFor(jid) });
       raw = await agent.runReply({ contact, transcript, health: results, topics: recalled, openRequests, onEvent, ...(note && { note }) });
       out = core.parseAgentOutput(raw, { idPattern: actions.idPattern });
       // A persona may only REPLY: anything else (handoff, implement, approve) is no reply at all.
@@ -451,10 +453,10 @@ export function createBridge({
     // The agent's own blocking judgment (e.g. an incident) always vetoes an APPROVE in the same run.
     const veto = approve && handoff?.blocking ? `el agente marcó el caso como bloqueante (${handoff.type})` : null;
     // Persisted for the portal before any early return, shadow drafts included (never for /simular: the sim has no store).
-    if (handoff) store.addHandoff(jid, { type: handoff.type, blocking: handoff.blocking, summary: handoff.fields?.summary ?? '', at: clock.now().getTime(), shadow: !!store.getState().shadow });
+    if (handoff) store.addHandoff(jid, { type: handoff.type, blocking: handoff.blocking, summary: handoff.fields?.summary ?? '', at: clock.now().getTime(), shadow: shadowFor(jid) });
     // Peticiones: shadow too (flagged), even if the draft is discarded below; never for /simular.
     if (handoff?.type === 'feature-request') {
-      const shadow = !!store.getState().shadow;
+      const shadow = shadowFor(jid);
       const r = requests.fromHandoff(jid, contact, handoff, { shadow });
       if (r) {
         await say(`${shadow ? '[sombra] ' : ''}PETICIÓN #${r.id} · ${contact.name}: ${r.summary}`);
@@ -463,10 +465,10 @@ export function createBridge({
     }
     if (handoff?.blocking) {
       const summary = handoff.fields?.summary || handoff.type;
-      notify({ title: 'wha-me: necesitas intervenir', message: `${store.getState().shadow ? '(sombra) ' : ''}${contact.name}: ${summary}`, key: `handoff:${jid}:${handoff.type}:${summary}` });
+      notify({ title: 'wha-me: necesitas intervenir', message: `${shadowFor(jid) ? '(sombra) ' : ''}${contact.name}: ${summary}`, key: `handoff:${jid}:${handoff.type}:${summary}` });
     }
 
-    if (store.getState().shadow) {
+    if (shadowFor(jid)) {
       await say(fmtDraft('[sombra]', { ...contact, name: label }, out));
       if (handoffEvent(handoff, bubbles)) remember(jid, fmtHandoffEvent(handoff, bubbles, true));
       if (implement && contact.canTriggerImplementation) remember(jid, `implementación pendiente: ${implement.summary}`);
@@ -663,7 +665,7 @@ export function createBridge({
     if (!bubbles?.length) return;
     const st = store.getState();
     // Held for the owner to send themselves; ownerActive = they are handling the chat right now.
-    if (st.shadow || st.paused || ownerActive(jid)) return say([`[no enviado] → ${contact.name}:`, ...bubbles].join('\n\n'));
+    if (shadowFor(jid) || st.paused || ownerActive(jid)) return say([`[no enviado] → ${contact.name}:`, ...bubbles].join('\n\n'));
     if (!inHours(jid)) {
       clock.setTimer(() => deliver(jid, contact, bubbles).catch((e) => say(`ERROR deliver · ${contact.name}\n${e.message}`)), msUntilOpening());
       return;
