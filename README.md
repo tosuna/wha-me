@@ -117,6 +117,9 @@ An array of chats (see `bridge/contacts.example.json`):
 - `model` (optional): Claude model id passed as `--model` to this contact's reply runs (e.g. `claude-haiku-5-5`), with or
   without `persona`.
 - `anyHour` (optional): `true` answers this contact at any time, ignoring `profile.hours`.
+- `live` (optional): `true` handles this contact as if shadow mode were off (replies are sent, normal delay,
+  business hours apply unless `anyHour`) while every other contact stays in shadow.
+  Useful to trial a single chat live while the rest stays in shadow.
 
 ## Configuration reference
 
