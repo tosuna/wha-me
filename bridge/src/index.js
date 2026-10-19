@@ -18,7 +18,7 @@ import { createConsoleTrace } from './console-trace.js';
 import { createFeedback } from './feedback.js';
 import { checkHealth } from './health.js';
 import { createLearner } from './learn.js';
-import { createMediaStore } from './media-store.js';
+import { createMediaStore, pruneOldDays } from './media-store.js';
 import { createMemoryChats } from './memory-chats.js';
 import { createNotifier, createWaAlerts } from './notify.js';
 import { createPipeline, createStageLock, DEFAULT_STEPS } from './pipeline.js';
@@ -107,6 +107,17 @@ const portal = await startPortal({ profile, knowledge, pipeline: pipelineConfig,
 const url = `http://127.0.0.1:${portal?.address().port ?? port}`;
 if (portal) console.log(`portal en ${url}`);
 
+// Images to describe (wa.js describeImage) stay on disk 10 days, then go; the description stays in the transcript.
+const mediaTmp = join(stateDir, 'media-tmp');
+const imageStore = createMediaStore({ dir: mediaTmp });
+const pruneMediaTmp = () => {
+  try { pruneOldDays({ dir: mediaTmp, days: 10 }); } catch (e) { console.error('media-tmp prune failed:', e.message); }
+};
+pruneMediaTmp();
+setInterval(pruneMediaTmp, 24 * 60 * 60 * 1000).unref();
+// Before connectWa: images that arrive right after linking are described with it.
+const agent = withFreshCode(createAgent({ profile, workspace, knowledge }), prodCode);
+
 const waFile = join(stateDir, 'wa.json');
 const waAlerts = createWaAlerts({ alert: notifier.alert, url });
 const wa = await connectWa({
@@ -130,6 +141,17 @@ const wa = await connectWa({
   // bridge.say runs the secret guard; before the bridge exists the line only goes to the log.
   notice: (text) => (bridge ? bridge.say(text) : console.log(text)),
   nameOf: (jid) => (core.lookupContact(contacts, jid) ?? core.lookupContact(memoryChats.list(), jid))?.name ?? jid,
+  // Images are described for 1:1 contacts.json chats only (the self-chat is always allowed inside wa.js): never groups,
+  // memory-only or unknown chats. Context: the chat's last 10 transcript entries, read before this message is appended.
+  shouldDescribe: (jid) => {
+    const c = core.lookupContact(contacts, jid);
+    return !!c && c.type !== 'group';
+  },
+  describeImage: async ({ id, at, chatJid, caption, mimetype, buf }) => {
+    const ext = /^image\/(\w+)/.exec(mimetype ?? '')?.[1] ?? 'jpeg';
+    const path = await imageStore.save({ id, fileName: `imagen.${ext}`, at, buf });
+    return agent.describeImage({ path, caption, context: store.getTranscript(chatJid).slice(-10) });
+  },
 });
 
 const clock = {
@@ -139,7 +161,6 @@ const clock = {
   clearTimer: clearTimeout,
 };
 
-const agent = withFreshCode(createAgent({ profile, workspace, knowledge }), prodCode);
 bridge = createBridge({
   profile, workspace, wa, store, agent, clock, contacts, selfJid: wa.selfJid, core,
   health: () => checkHealth(knowledge.healthUrls), leaks, topics, archivist: createArchivist({ profile, topics, run: claudeRunner(), leaks }), memoryChats, seenChats, trace: createConsoleTrace({ root: workspace.root, skill: skillDir(profile) }),
