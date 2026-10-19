@@ -13,10 +13,10 @@ test('replyDelayMs within [180000, 360000]', () => {
   assert.ok(r >= 180000 && r <= 360000);
 });
 
-test('personaDelayMs within [20000, 60000]', () => {
-  assert.equal(personaDelayMs(lo), 20000);
+test('personaDelayMs within [1000, 2000]', () => {
+  assert.equal(personaDelayMs(lo), 1000);
   const h = personaDelayMs(hi);
-  assert.ok(h <= 60000 && h > 59000);
+  assert.ok(h <= 2000 && h > 1999);
 });
 
 test('typingMs = chars/4 s * [0.8, 1.2]', () => {
