@@ -57,7 +57,7 @@ function wipeAuth(dir) {
 // onSkippedGroup(groupJid, timestampMs) hears each dropped group message (no text).
 // Documents in chats shouldTranscribe allows (not the self-chat) go to saveDocument({ id, fileName, at, buf }) -> path, and
 // notice(text) tells the self-chat where (nameOf(chatJid) names the chat). The content never enters the text.
-// Images in the self-chat and in 1:1 chats shouldDescribe(chatJid) allows (never groups) go to
+// Images in chats shouldDescribe(chatJid) allows (the self-chat included; never groups) go to
 // describeImage({ id, at, chatJid, caption, mimetype, buf }) -> description, kept in the text like an audio transcript.
 export function createNormalizer({
   self, pnForLid, onUnresolved, download, transcribe, shouldTranscribe = () => false, allowGroup = () => false,
@@ -120,7 +120,7 @@ export function createNormalizer({
   async function textOf(m, chatJid, participantIds) {
     const c = normalizeMessageContent(m.message);
     const isSelf = chatJid === self().selfJid;
-    if (c?.imageMessage && describeImage && !participantIds && (isSelf || shouldDescribe(chatJid))) return imageText(m, chatJid, c.imageMessage);
+    if (c?.imageMessage && describeImage && !participantIds && shouldDescribe(chatJid)) return imageText(m, chatJid, c.imageMessage);
     if (c?.audioMessage && (isSelf || shouldTranscribe(chatJid, participantIds))) return audioText(m, c.audioMessage);
     if (c?.documentMessage && saveDocument && !isSelf && shouldTranscribe(chatJid, participantIds)) return documentText(m, chatJid, c.documentMessage);
     return messageText(m.message);

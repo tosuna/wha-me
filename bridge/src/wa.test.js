@@ -301,9 +301,12 @@ test('an image from an allowed chat is described: [imagen: caption] <description
   assert.equal((await i.normalize(imgMsg({ remoteJid: BEA }, img({ caption: undefined })))).text, '[imagen] una captura de un error 500');
 });
 
-test('an image in the self-chat is described even when the gate refuses', async () => {
-  const i = imageSetup({ shouldDescribe: () => false });
-  assert.equal((await i.normalize(imgMsg({ remoteJid: SELF, fromMe: true }))).text, '[imagen: el error] una captura de un error 500');
+test('an image in the self-chat asks the gate like any chat (index.js allows it only while /simular runs)', async () => {
+  const off = imageSetup({ shouldDescribe: () => false });
+  assert.equal((await off.normalize(imgMsg({ remoteJid: SELF, fromMe: true }))).text, '[imagen: el error]');
+  assert.equal(off.downloads.length, 0);
+  const on = imageSetup({ shouldDescribe: (jid) => jid === SELF });
+  assert.equal((await on.normalize(imgMsg({ remoteJid: SELF, fromMe: true }))).text, '[imagen: el error] una captura de un error 500');
 });
 
 test('an image outside the gate, in a group, or with no describer is never downloaded', async () => {
@@ -312,7 +315,7 @@ test('an image outside the gate, in a group, or with no describer is never downl
   assert.equal((await i.normalize(imgMsg({ remoteJid: CARL }))).text, '[imagen: el error]');
   assert.equal((await i.normalize(imgMsg({ remoteJid: GRP, participant: IKER_LID, participantAlt: IKER_PN }))).text, '[imagen: el error]');
   assert.equal(i.downloads.length, 0);
-  const d = imageSetup({ shouldDescribe: null }); // the default gate: only the self-chat
+  const d = imageSetup({ shouldDescribe: null }); // the default gate: none
   assert.equal((await d.normalize(imgMsg({ remoteJid: BEA }))).text, '[imagen: el error]');
   assert.equal(d.downloads.length, 0);
   const none = createNormalizer({ self: () => ({ selfJid: SELF, selfLid: SELF_LID }), pnForLid: async () => null, onUnresolved: () => {}, download: async () => assert.fail('downloaded') });

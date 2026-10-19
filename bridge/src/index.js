@@ -141,9 +141,11 @@ const wa = await connectWa({
   // bridge.say runs the secret guard; before the bridge exists the line only goes to the log.
   notice: (text) => (bridge ? bridge.say(text) : console.log(text)),
   nameOf: (jid) => (core.lookupContact(contacts, jid) ?? core.lookupContact(memoryChats.list(), jid))?.name ?? jid,
-  // Images are described for 1:1 contacts.json chats only (the self-chat is always allowed inside wa.js): never groups,
-  // memory-only or unknown chats. Context: the chat's last 10 transcript entries, read before this message is appended.
+  // Images are described for 1:1 contacts.json chats, and in the self-chat only while /simular runs (otherwise bridge.js
+  // drops non-command self-chat text, so the run would be wasted): never groups, memory-only or unknown chats.
+  // Context: the chat's last 10 transcript entries, read before this message is appended.
   shouldDescribe: (jid) => {
+    if (bridge && jid === wa.selfJid) return bridge.simActive(); // bridge is set after wa, so wa is initialized here
     const c = core.lookupContact(contacts, jid);
     return !!c && c.type !== 'group';
   },
