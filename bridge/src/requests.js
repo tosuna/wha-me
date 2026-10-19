@@ -50,7 +50,8 @@ export const TRANSITIONS = {
   en_revision: ['en_preprod', 'implementando', 'fallida'], // implementando: the one fix round (enforced by the runtime)
   en_preprod: ['listo_para_entregar', 'fallida'],
   fallida: ['aprobada', 'fusionada'],
-  listo_para_entregar: [],
+  listo_para_entregar: ['entregada'], // the owner marks it once it reached prod (outside the pipeline)
+  entregada: [],
   rechazada: [],
   fusionada: [], // merged into another request by the owner (merge below)
 };
@@ -58,7 +59,7 @@ export const FILTERS = {
   activas: ACTIVE,
   por_revisar: ['nueva', 'info_pedida', 'fallida'],
   listas: ['listo_para_entregar'],
-  cerradas: ['rechazada', 'fusionada'],
+  cerradas: ['entregada', 'rechazada', 'fusionada'],
 };
 // The owner's portal actions: the states each one starts from, and where it goes. cancel = fallida (retry brings it back).
 // held(hold): only while the request waits on such a hold (sensitive diff, review step; clash, preprod step). to null: no
