@@ -133,6 +133,16 @@ test('list filters: activas | por_revisar | listas | cerradas, newest first; unk
   for (const k of ['id', 'status', 'contactName', 'summary', 'createdAt', 'updatedAt', 'handoffCount', 'shadow', 'costUsd']) assert.ok(k in item, k);
 });
 
+test('entregada: only from listo_para_entregar, terminal, listed under cerradas', () => {
+  const { r } = setup();
+  const { id } = r.fromHandoff(BEA, bea, fr('x'), { shadow: false });
+  assert.throws(() => r.transition(id, 'entregada', { actor: 'owner' }), { code: 'ILLEGAL_TRANSITION' });
+  for (const s of ['aprobada', 'planificando', 'implementando', 'en_revision', 'en_preprod', 'listo_para_entregar', 'entregada']) r.transition(id, s, { actor: 'owner' });
+  assert.deepEqual(TRANSITIONS.entregada, []);
+  assert.deepEqual(r.list('cerradas').map((x) => x.id), [id]);
+  assert.deepEqual(r.list('listas'), []);
+});
+
 test('secrets in summary, evidence, questions and event text are stored redacted', () => {
   const { r } = setup();
   const { id } = r.fromHandoff(BEA, bea, fr('token ghp_abc123', { evidence: 'clave SUPERSECRET aqui' }), { shadow: false });

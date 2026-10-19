@@ -1468,7 +1468,7 @@ async function sendSticker(id, button) {
 const REQ_STATUS = {
   nueva: ['Nueva', 'warn'], info_pedida: ['Esperando al contacto', ''], aprobada: ['En cola', 'calm'], planificando: ['Planificando', 'calm'],
   implementando: ['Implementando', 'calm'], en_revision: ['En revisión', 'calm'], en_preprod: ['En preprod', 'calm'],
-  listo_para_entregar: ['Lista para entregar', 'warn'], fallida: ['Falló', 'bad'], rechazada: ['Rechazada', ''],
+  listo_para_entregar: ['Lista para entregar', 'warn'], entregada: ['Entregada', 'ok'], fallida: ['Falló', 'bad'], rechazada: ['Rechazada', ''],
   fusionada: ['Fusionada', ''],
 };
 const reqStatus = (s) => REQ_STATUS[s] || [s, ''];
@@ -1477,7 +1477,7 @@ const REQ_FILTERS = [
   ['por_revisar', 'Por revisar', ['nueva', 'info_pedida', 'fallida']],
   ['activas', 'Activas', ['aprobada', 'planificando', 'implementando', 'en_revision', 'en_preprod']],
   ['listas', 'Listas', ['listo_para_entregar']],
-  ['cerradas', 'Cerradas', ['rechazada', 'fusionada']],
+  ['cerradas', 'Cerradas', ['entregada', 'rechazada', 'fusionada']],
   ['todas', 'Todas', null],
 ];
 // [label, button tone, confirm text, needs text: null | 'optional' | 'required', text label]
@@ -1801,7 +1801,7 @@ function renderReqBar(r) {
   }
   if (!r.actions.length) {
     box.replaceChildren(el('span', 'lead', r.status === 'info_pedida' ? 'Esperando la respuesta del contacto; vuelve a Nueva cuando conteste.'
-      : ['rechazada', 'fusionada'].includes(r.status) ? 'Petición cerrada.' : 'En manos del pipeline; no hay nada que decidir ahora.'));
+      : ['entregada', 'rechazada', 'fusionada'].includes(r.status) ? 'Petición cerrada.' : 'En manos del pipeline; no hay nada que decidir ahora.'));
     return;
   }
   box.replaceChildren(el('span', 'lead', '¿Qué hacemos con la petición #' + r.id + '?'), ...r.actions.map((a) => {
