@@ -285,7 +285,7 @@ export function createAgent({ profile, workspace, knowledge, spawn = nodeSpawn, 
     const { contact } = args;
     const { GH_TOKEN, GITHUB_TOKEN, ...env } = process.env;
     const [prompt, a] = contact.persona ? personaRun(args) : skillRun(args);
-    return run(prompt, [...a, ...(contact.model ? ['--model', contact.model] : [])], REPLY_TIMEOUT, REPLY_CWD, env, output);
+    return run(prompt, [...a, ...(contact.model ? ['--model', contact.model] : []), ...(contact.effort ? ['--effort', contact.effort] : [])], REPLY_TIMEOUT, REPLY_CWD, env, output);
   }
 
   // A contacts.json `persona` (markdown, absolute or relative to this checkout's root, read on every run): the whole
