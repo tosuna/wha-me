@@ -674,5 +674,5 @@ export function createBridge({
     await sendBubbles(jid, bubbles);
   }
 
-  return { handleMessage, processQueue, restorePending, sendManual, sendManualSticker, askContact, say, catchUpArchive };
+  return { handleMessage, processQueue, restorePending, sendManual, sendManualSticker, askContact, say, catchUpArchive, simActive: () => sim.active() };
 }
