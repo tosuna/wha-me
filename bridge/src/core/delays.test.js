@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { replyDelayMs, typingMs, bubbleGapMs } from './delays.js';
+import { replyDelayMs, personaDelayMs, typingMs, bubbleGapMs } from './delays.js';
 
 const lo = () => 0;
 const hi = () => 0.9999999;
@@ -11,6 +11,12 @@ test('replyDelayMs within [180000, 360000]', () => {
   assert.ok(h <= 360000 && h > 359000);
   const r = replyDelayMs();
   assert.ok(r >= 180000 && r <= 360000);
+});
+
+test('personaDelayMs within [20000, 60000]', () => {
+  assert.equal(personaDelayMs(lo), 20000);
+  const h = personaDelayMs(hi);
+  assert.ok(h <= 60000 && h > 59000);
 });
 
 test('typingMs = chars/4 s * [0.8, 1.2]', () => {

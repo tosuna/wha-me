@@ -150,7 +150,7 @@ export function createBridge({
     key: `incident:${job.jid}:${job.implement.summary}`,
   });
   // Shadow is for watching the agent: no human-like delay and no business-hours wait (nothing reaches the contact).
-  const replyDelay = (jid) => (shadowFor(jid) ? core.shadowDelayMs() : core.replyDelayMs());
+  const replyDelay = (jid) => (shadowFor(jid) ? core.shadowDelayMs() : isPersona(contactOf(jid)) ? core.personaDelayMs() : core.replyDelayMs());
   const ownerActive = (jid) => core.isOwnerActive(store.getLastManualFromMeAt(jid), clock.now());
 
   // --- topic memory ---
@@ -315,7 +315,7 @@ export function createBridge({
   }
 
   // Every member's message goes to the transcript; only a respondTo member schedules a reply, anyone else
-  // (a teammate or the owner) cancels the pending one: the team already answered.
+  // (a teammate or the owner) cancels the pending one: the team already answered. In a persona group only the owner does.
   function groupMessage(group, msg) {
     const jid = msg.chatJid;
     if (msg.fromMe && store.isSentId(msg.id)) return;
@@ -329,6 +329,7 @@ export function createBridge({
         strangers.add(msg.participant);
         log(`group ${group.name}: ${(msg.participantIds ?? []).join(' / ')} (${msg.pushName ?? 'sin nombre'}) is not in respondTo`);
       }
+      if (!msg.fromMe && isPersona(group)) return; // banter: friends talking is context, not the team answering
       spoke.set(jid, (spoke.get(jid) ?? 0) + 1);
       debouncer.cancel(jid);
       store.clearPending(jid);

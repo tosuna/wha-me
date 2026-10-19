@@ -42,6 +42,7 @@ function fakeCore(over = {}) {
   return {
     replyDelayMs: () => DELAY,
     shadowDelayMs: () => DELAY,
+    personaDelayMs: () => DELAY,
     typingMs: (t) => t.length * 1000,
     bubbleGapMs: () => 2000,
     isWithinHours: () => true,
@@ -2203,6 +2204,36 @@ test('persona group: the reply quotes the triggering respondTo message', async (
   await s.advance(DELAY);
   const [send] = s.log.filter((l) => l[0] === 'send' && l[1] === PGRP);
   assert.deepEqual(send[3].quoted.message, { conversation: 'hola' });
+});
+
+// A banter group: friends keep talking, so only the owner silences the bot, and it answers fast (personaDelayMs).
+const pmsg = (s, ids, text, extra = {}) => s.msg(PGRP, text, { participant: ids[0], participantIds: ids, pushName: null, message: { conversation: text }, ...extra });
+
+test('persona group: other members writing (before or during the run) neither cancel nor discard the reply', async () => {
+  let s;
+  s = personaSetup({ core: { personaDelayMs: () => DELAY }, reply: async () => { await pmsg(s, ['x@lid'], 'jajaja', { pushName: 'Julián' }); return { bubbles: ['ni tú te la crees'], handoff: null, implement: null }; } });
+  await pmsg(s, ['ana@lid'], 'te va a salir mal');
+  await pmsg(s, ['x@lid'], 'uff', { pushName: 'Julián' });
+  await s.advance(DELAY);
+  assert.deepEqual(s.toContact(PGRP), ['ni tú te la crees']);
+  assert.deepEqual(s.calls.reply[0].transcript.map((e) => e.author), ['Ana', 'Julián']);
+});
+
+test('persona group: the owner writing still cancels the pending reply', async () => {
+  const s = personaSetup({ core: { personaDelayMs: () => DELAY } });
+  await pmsg(s, ['ana@lid'], 'te va a salir mal');
+  await pmsg(s, ['me@lid'], 'ya cállate', { fromMe: true });
+  await s.advance(DELAY * 2);
+  assert.equal(s.calls.reply.length, 0);
+});
+
+test('persona chats wait personaDelayMs, other chats replyDelayMs', async () => {
+  const s = personaSetup({ core: { personaDelayMs: () => DELAY, replyDelayMs: () => DELAY * 100 } });
+  await pmsg(s, ['ana@lid'], 'hola');
+  await s.msg(BEA, 'hola');
+  await s.advance(DELAY);
+  assert.equal(s.calls.reply.length, 1);
+  assert.equal(s.calls.reply[0].contact.name, 'Familia');
 });
 
 test('anyHour: answered out of hours (live); other contacts still deferred', async () => {
