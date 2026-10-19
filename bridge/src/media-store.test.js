@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createMediaStore, safeFileName } from './media-store.js';
+import { createMediaStore, pruneOldDays, safeFileName } from './media-store.js';
 
 const AT = Date.UTC(2026, 9, 15, 18); // midday in Mexico: 2026-10-15 in any American timezone
 
@@ -54,4 +54,21 @@ test('safeFileName: basename, no control or bidi chars, no leading dots, extensi
   const long = safeFileName(`${'a'.repeat(300)}.xlsx`);
   assert.equal(long.length, 100);
   assert.ok(long.endsWith('.xlsx'));
+});
+
+test('pruneOldDays removes date folders older than 10 days, keeps recent ones and anything else', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'media-tmp-'));
+  const dir = join(root, 'media-tmp');
+  const now = new Date(2026, 9, 19, 12).getTime(); // local 2026-10-19
+  for (const d of ['2026-10-01', '2026-10-08', '2026-10-09', '2026-10-19']) {
+    mkdirSync(join(dir, d), { recursive: true });
+    writeFileSync(join(dir, d, 'x.png'), 'x');
+  }
+  mkdirSync(join(dir, 'notes'));
+  writeFileSync(join(dir, '2020-01-01'), 'a file, not a folder');
+  writeFileSync(join(root, 'outside.txt'), 'x');
+  pruneOldDays({ dir, days: 10, now });
+  assert.deepEqual(readdirSync(dir).sort(), ['2020-01-01', '2026-10-09', '2026-10-19', 'notes']);
+  assert.ok(existsSync(join(root, 'outside.txt')));
+  pruneOldDays({ dir: join(root, 'missing'), now }); // no folder yet: no-op
 });

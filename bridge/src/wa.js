@@ -22,6 +22,7 @@ const MAX_AUDIO_SECONDS = 600;
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const TOO_BIG = '[audio] (demasiado grande, no transcrito)';
 const MAX_DOC_BYTES = 25 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 const withCaption = (label, caption) => (caption ? `[${label}: ${caption}]` : `[${label}]`);
 const docText = (label, { fileName, caption }) => `${withCaption(label, fileName)}${caption ? ` ${caption}` : ''}`;
@@ -56,9 +57,12 @@ function wipeAuth(dir) {
 // onSkippedGroup(groupJid, timestampMs) hears each dropped group message (no text).
 // Documents in chats shouldTranscribe allows (not the self-chat) go to saveDocument({ id, fileName, at, buf }) -> path, and
 // notice(text) tells the self-chat where (nameOf(chatJid) names the chat). The content never enters the text.
+// Images in the self-chat and in 1:1 chats shouldDescribe(chatJid) allows (never groups) go to
+// describeImage({ id, at, chatJid, caption, mimetype, buf }) -> description, kept in the text like an audio transcript.
 export function createNormalizer({
   self, pnForLid, onUnresolved, download, transcribe, shouldTranscribe = () => false, allowGroup = () => false,
   onSkippedGroup = () => {}, logError = console.error, log = console.log, saveDocument, notice = () => {}, nameOf = (jid) => jid,
+  describeImage, shouldDescribe = () => false,
 }) {
   const noted = new Set();
 
@@ -96,10 +100,27 @@ export function createNormalizer({
     return docText('documento', doc);
   }
 
-  // Audio and documents are only fetched for gated chats; the gate is asked lazily (only for those message types).
+  // fileLength is sender-declared: first filter, the buffer size is rechecked. Failures never throw; only the error is logged.
+  async function imageText(m, chatJid, { caption, mimetype, fileLength }) {
+    const label = withCaption('imagen', caption);
+    if (!(toNumber(fileLength) <= MAX_IMAGE_BYTES)) return `${label} (demasiado grande, no descrita)`;
+    try {
+      const buf = await download(m);
+      if (buf.length > MAX_IMAGE_BYTES) return `${label} (demasiado grande, no descrita)`;
+      const description = await describeImage({ id: m.key.id, at: toMs(m.messageTimestamp), chatJid, caption, mimetype, buf });
+      if (description) return `${label} ${description}`;
+    } catch (e) {
+      logError('image description failed:', e.message);
+    }
+    return `${label} (no se pudo describir)`;
+  }
+
+  // Audio, documents and images are only fetched for gated chats; the gate is asked lazily (only for those message types).
+  // Images: participantIds is set only for groups, which are never described.
   async function textOf(m, chatJid, participantIds) {
     const c = normalizeMessageContent(m.message);
     const isSelf = chatJid === self().selfJid;
+    if (c?.imageMessage && describeImage && !participantIds && (isSelf || shouldDescribe(chatJid))) return imageText(m, chatJid, c.imageMessage);
     if (c?.audioMessage && (isSelf || shouldTranscribe(chatJid, participantIds))) return audioText(m, c.audioMessage);
     if (c?.documentMessage && saveDocument && !isSelf && shouldTranscribe(chatJid, participantIds)) return documentText(m, chatJid, c.documentMessage);
     return messageText(m.message);
@@ -178,7 +199,7 @@ export async function connectWa({
   makeSocket = makeWASocket, useAuth = useMultiFileAuthState, retryMs = 3000,
   printQr = (qr) => qrcode.generate(qr, { small: true }),
   download = (m) => downloadMediaMessage(m, 'buffer', {}), transcribe = createTranscriber(), shouldTranscribe, allowGroup, onSkippedGroup = () => {},
-  saveDocument, notice, nameOf,
+  saveDocument, notice, nameOf, describeImage, shouldDescribe,
 }) {
   let auth = await useAuth(authDir);
   const report = (s) => onStatus({ ...s, at: new Date().toISOString() });
@@ -205,6 +226,8 @@ export async function connectWa({
     saveDocument,
     notice,
     nameOf,
+    describeImage,
+    shouldDescribe,
     onSkippedGroup: (jid, at) => subjectOf(jid).then((subject) => onSkippedGroup(jid, at, subject))
       .catch((e) => console.error('skipped group record failed:', e.message)),
   });

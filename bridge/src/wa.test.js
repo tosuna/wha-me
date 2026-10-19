@@ -270,6 +270,76 @@ test('the same document msgId twice leaves a single file, never rewritten', asyn
   assert.equal(readFileSync(join(d.dir, '2026-10-15', 'D1-reporte.xlsx'), 'utf8'), 'v1');
 });
 
+// --- images: described for the self-chat and gated 1:1 chats; the description stays in the text ---
+
+const MB10 = 10 * 1024 * 1024;
+const img = (extra = {}) => ({ imageMessage: { caption: 'el error', mimetype: 'image/png', fileLength: 2048, ...extra } });
+const imgMsg = (key, message = img()) => ({ ...m(key, message), messageTimestamp: DOC_AT });
+
+function imageSetup({ shouldDescribe = (jid) => jid === BEA, downloadImpl = async () => Buffer.from('PNG'), describeImpl = async () => 'una captura de un error 500' } = {}) {
+  const downloads = [];
+  const described = [];
+  const errors = [];
+  const normalize = createNormalizer({
+    self: () => ({ selfJid: SELF, selfLid: SELF_LID }),
+    pnForLid: async () => null,
+    onUnresolved: () => {},
+    download: async (msg) => { downloads.push(msg); return downloadImpl(msg); },
+    allowGroup: (jid) => jid === GRP,
+    shouldTranscribe: () => true,
+    describeImage: async (a) => { described.push({ ...a, buf: a.buf.toString() }); return describeImpl(a); },
+    logError: (...a) => errors.push(a.join(' ')),
+    ...(shouldDescribe && { shouldDescribe }),
+  });
+  return { normalize, downloads, described, errors };
+}
+
+test('an image from an allowed chat is described: [imagen: caption] <description>, with id/at/chat/caption/mimetype/bytes', async () => {
+  const i = imageSetup();
+  assert.equal((await i.normalize(imgMsg({ remoteJid: BEA, id: 'IMG1' }))).text, '[imagen: el error] una captura de un error 500');
+  assert.deepEqual(i.described, [{ id: 'IMG1', at: DOC_AT * 1000, chatJid: BEA, caption: 'el error', mimetype: 'image/png', buf: 'PNG' }]);
+  assert.equal((await i.normalize(imgMsg({ remoteJid: BEA }, img({ caption: undefined })))).text, '[imagen] una captura de un error 500');
+});
+
+test('an image in the self-chat is described even when the gate refuses', async () => {
+  const i = imageSetup({ shouldDescribe: () => false });
+  assert.equal((await i.normalize(imgMsg({ remoteJid: SELF, fromMe: true }))).text, '[imagen: el error] una captura de un error 500');
+});
+
+test('an image outside the gate, in a group, or with no describer is never downloaded', async () => {
+  const CARL = '5210000000222@s.whatsapp.net';
+  const i = imageSetup({ shouldDescribe: (jid) => jid !== CARL }); // allows the group too: wa.js still refuses it
+  assert.equal((await i.normalize(imgMsg({ remoteJid: CARL }))).text, '[imagen: el error]');
+  assert.equal((await i.normalize(imgMsg({ remoteJid: GRP, participant: IKER_LID, participantAlt: IKER_PN }))).text, '[imagen: el error]');
+  assert.equal(i.downloads.length, 0);
+  const d = imageSetup({ shouldDescribe: null }); // the default gate: only the self-chat
+  assert.equal((await d.normalize(imgMsg({ remoteJid: BEA }))).text, '[imagen: el error]');
+  assert.equal(d.downloads.length, 0);
+  const none = createNormalizer({ self: () => ({ selfJid: SELF, selfLid: SELF_LID }), pnForLid: async () => null, onUnresolved: () => {}, download: async () => assert.fail('downloaded') });
+  assert.equal((await none(imgMsg({ remoteJid: SELF }))).text, '[imagen: el error]');
+});
+
+test('an image over 10 MB (declared, missing, or real) is not described', async () => {
+  const i = imageSetup();
+  assert.equal((await i.normalize(imgMsg({ remoteJid: BEA }, img({ fileLength: MB10 + 1 })))).text, '[imagen: el error] (demasiado grande, no descrita)');
+  assert.equal((await i.normalize(imgMsg({ remoteJid: BEA }, img({ fileLength: undefined })))).text, '[imagen: el error] (demasiado grande, no descrita)');
+  assert.equal(i.downloads.length, 0);
+  const big = imageSetup({ downloadImpl: async () => Buffer.alloc(MB10 + 1) });
+  assert.equal((await big.normalize(imgMsg({ remoteJid: BEA }))).text, '[imagen: el error] (demasiado grande, no descrita)');
+  assert.equal(big.described.length, 0);
+});
+
+test('a failed download or description becomes (no se pudo describir) and logs only the error message', async () => {
+  const dl = imageSetup({ downloadImpl: async () => { throw new Error('media gone'); } });
+  assert.equal((await dl.normalize(imgMsg({ remoteJid: BEA }))).text, '[imagen: el error] (no se pudo describir)');
+  assert.deepEqual(dl.errors, ['image description failed: media gone']);
+  const ds = imageSetup({ describeImpl: async () => { throw new Error('claude timed out'); } });
+  assert.equal((await ds.normalize(imgMsg({ remoteJid: BEA }))).text, '[imagen: el error] (no se pudo describir)');
+  assert.deepEqual(ds.errors, ['image description failed: claude timed out']);
+  const empty = imageSetup({ describeImpl: async () => '' });
+  assert.equal((await empty.normalize(imgMsg({ remoteJid: BEA }))).text, '[imagen: el error] (no se pudo describir)');
+});
+
 // --- connection lifecycle with a fake Baileys socket ---
 
 const close = (statusCode) => ({ connection: 'close', lastDisconnect: { error: { output: { statusCode } } } });
@@ -388,6 +458,18 @@ test('connectWa injects download/transcribe/shouldTranscribe into the upsert pat
   w.last().ev.emit('messages.upsert', { messages: [m({ remoteJid: BEA }, audio())] });
   await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(got, ['[audio] oido OGG']);
+});
+
+test('connectWa injects describeImage/shouldDescribe into the upsert path', async () => {
+  const w = fakeWa({ download: async () => Buffer.from('PNG'), describeImage: async ({ buf }) => `vi ${buf}`, shouldDescribe: (jid) => jid === BEA });
+  await tick();
+  w.emit({ connection: 'open' });
+  const api = await w.p;
+  const got = [];
+  api.onMessage((msg) => got.push(msg.text));
+  w.last().ev.emit('messages.upsert', { messages: [m({ remoteJid: BEA }, img())] });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(got, ['[imagen: el error] vi PNG']);
 });
 
 test('connectWa injects saveDocument/notice/nameOf into the upsert path', async () => {

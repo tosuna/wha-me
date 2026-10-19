@@ -1,3 +1,4 @@
+import { readdirSync, rmSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
@@ -33,4 +34,20 @@ export function createMediaStore({ dir }) {
       return path;
     },
   };
+}
+
+const DAY_DIR = /^\d{4}-\d{2}-\d{2}$/;
+
+// Temporary media (state/media-tmp): removes the <YYYY-MM-DD> folders more than `days` days old, by folder name (the
+// message's local date, as save() names them). Anything else in dir is left alone; a missing dir is a no-op.
+export function pruneOldDays({ dir, days = 10, now = Date.now() }) {
+  const cutoff = new Date(now - days * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE');
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    if (e.code === 'ENOENT') return;
+    throw e;
+  }
+  for (const e of entries) if (e.isDirectory() && DAY_DIR.test(e.name) && e.name < cutoff) rmSync(join(dir, e.name), { recursive: true, force: true });
 }
