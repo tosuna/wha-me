@@ -122,12 +122,14 @@ function validateKnowledge(k, fail, text) {
 
 // contacts.json optional per-contact fields (index.js checks them at startup): persona = markdown file, absolute or relative
 // to the repo root, that must exist; model = Claude model id for that contact's reply runs; anyHour = ignore profile.hours; live = answer for real even in shadow mode.
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']; // claude --effort
 export function validateContacts(contacts) {
   for (const c of contacts) {
     const fail = (field, why) => { throw new Error(`invalid contacts.json ${c.name ?? c.jid}.${field}: ${why}`); };
     const text = (v) => typeof v === 'string' && v.trim() !== '';
     if (c.persona !== undefined && (!text(c.persona) || !existsSync(resolve(REPO_ROOT, c.persona)))) fail('persona', 'must be an existing file (absolute or relative to the wha-me repo root)');
     if (c.model !== undefined && !text(c.model)) fail('model', 'must be a non-empty string');
+    if (c.effort !== undefined && !EFFORTS.includes(c.effort)) fail('effort', `must be one of ${EFFORTS.join(', ')}`);
     if (c.anyHour !== undefined && typeof c.anyHour !== 'boolean') fail('anyHour', 'must be true or false');
     if (c.live !== undefined && typeof c.live !== 'boolean') fail('live', 'must be true or false');
   }

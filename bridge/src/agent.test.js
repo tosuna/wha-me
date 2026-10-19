@@ -737,3 +737,9 @@ test('runReply with model: --model <id>, with or without a persona; none by defa
   assert.deepEqual(after(persona, '--model'), ['claude-haiku-5-5']);
   assert.ok(!(await replyCall()).args.includes('--model'));
 });
+
+test('runReply with effort: --effort <level>, with or without a persona; none by default', async () => {
+  assert.deepEqual(after((await replyCall(undefined, [], { ...contact, effort: 'medium' })).args, '--effort'), ['medium']);
+  assert.deepEqual(after((await personaCall({ ...contact, persona: '/abs/robin.md', effort: 'medium' })).args, '--effort'), ['medium']);
+  assert.ok(!(await replyCall()).args.includes('--effort'));
+});
