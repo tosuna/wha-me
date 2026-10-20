@@ -96,13 +96,14 @@ Then talk to the bridge from your self-chat:
 | `/aprender` | Proposes edits to the skill's voice and contact notes from your corrections; `/aprender si` applies, `/aprender no` discards. |
 
 Other scripts in `bridge/package.json`: `portal` (the portal alone), `tunnel` (a Cloudflare quick tunnel to the portal),
-`seed-memory`, `setup:stt`.
+`seed-memory`, `setup:stt`, `login:tg` (see [Telegram](#telegram)).
 
 ### contacts.json
 
 An array of chats (see `bridge/contacts.example.json`):
 
-- `jid`: the WhatsApp id (`...@s.whatsapp.net` for a person, `...@g.us` for a group).
+- `jid`: the WhatsApp id (`...@s.whatsapp.net` for a person, `...@g.us` for a group), or a Telegram id `tg:<id>`
+  (see [Telegram](#telegram)).
 - `name`: how the agent and the portal refer to the contact.
 - `register`: the register to address them in (passed to the skill).
 - `tenant`: a key of `knowledge.tenants` in your config.
@@ -117,10 +118,34 @@ An array of chats (see `bridge/contacts.example.json`):
 - `model` (optional): Claude model id passed as `--model` to this contact's reply runs (e.g. `claude-haiku-5-5`), with or
   without `persona`.
 - `effort` (optional): `low`, `medium`, `high`, `xhigh` or `max`, passed as `--effort` to this contact's reply runs.
+
+The same name merges entries only within one channel (a phone jid and a LID listed with the same name are one person).
+A WhatsApp and a Telegram contact are never merged by name: two people called Carlos stay two people in the topic
+memory. When they really are the same person, link their chats in the portal (Memoria → Enlazar contactos, saved to
+`bridge/state/contact-links.json` and read live); chats with alike names are only suggested, never linked for you.
+A link shares the memory under the WhatsApp contact's identity; unlinking splits what comes next, not what was stored.
 - `anyHour` (optional): `true` answers this contact at any time, ignoring `profile.hours`.
 - `live` (optional): `true` handles this contact as if shadow mode were off (replies are sent, normal delay,
   business hours apply unless `anyHour`) while every other contact stays in shadow.
   Useful to trial a single chat live while the rest stays in shadow.
+
+### Telegram
+
+Optional second channel, on your own Telegram account (a userbot over MTProto, not a bot). Telegram chats get the same
+allowlist, gates, shadow mode and handoffs as WhatsApp; the self-chat (drafts, handoffs, commands) stays on WhatsApp, and
+every line there says which channel the chat is on (`[sombra · TG] → Carlos:`, `HANDOFF · WA · Bea`). Stickers are not
+sent on Telegram; voice notes are transcribed and photos described like on WhatsApp; other files stay placeholders.
+
+1. Create an API id and hash at https://my.telegram.org (API development tools) and export `TG_API_ID` and `TG_API_HASH`
+   wherever you run the bridge.
+2. `npm --prefix bridge run login:tg`: asks for your phone, the code Telegram sends you and your 2FA password, and saves
+   the session to `bridge/auth-tg/session`.
+3. Restart the bridge. Without both variables and a saved session it runs WhatsApp only, exactly as before.
+
+In `contacts.json`, a Telegram chat is `tg:<id>`: a person's user id (`tg:123456789`), a group's negative id
+(`tg:-123456`, supergroups `tg:-100…`); `respondTo` members are `tg:<user id>`. To find them: a chat that writes to you
+and is not in `contacts.json` shows up in the portal's Memoria view with its id; `/grupos` lists your Telegram groups;
+an unknown member of an allowlisted group is logged with their id.
 
 ## Configuration reference
 
@@ -208,6 +233,7 @@ Everything stays on your machine, except what the Claude Code CLI sends to Anthr
 checks you configure, and what the pipeline pushes to GitHub.
 
 - `bridge/auth/`: the WhatsApp session. Anyone with these files can act as your WhatsApp account.
+- `bridge/auth-tg/`: the Telegram session, same warning for your Telegram account.
 - `bridge/state/`: bridge state and pending replies, run logs, requests and learning pairs (SQLite), topic memory
   (`topics.db`), memory-only and seen chats, saved documents (`media/`), settings, the portal token, proposals.
 - `bridge/contacts.json`: your allowlist.

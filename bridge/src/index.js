@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as activity from './core/activity.js';
 import * as allowlist from './core/allowlist.js';
+import { CHANNEL_LABEL, channelOf } from './core/channel.js';
 import * as debounce from './core/debounce.js';
 import * as delays from './core/delays.js';
 import * as hours from './core/hours.js';
@@ -15,6 +16,7 @@ import { createBridge } from './bridge.js';
 import { createClashCheck } from './clash.js';
 import { loadConfig, validateContacts } from './config.js';
 import { createConsoleTrace } from './console-trace.js';
+import { createContactLinks } from './contact-links.js';
 import { createFeedback } from './feedback.js';
 import { checkHealth } from './health.js';
 import { createLearner } from './learn.js';
@@ -37,6 +39,7 @@ import { createSeenChats } from './seen-chats.js';
 import { createSettings } from './settings.js';
 import { createStore } from './store.js';
 import { createTopics } from './topics.js';
+import { createRouter } from './transport.js';
 import { connectWa } from './wa.js';
 import { quietSignalDumps } from './quiet-signal.js';
 
@@ -61,7 +64,11 @@ const store = createStore(stateDir, { initialState: core.initialState });
 const settings = createSettings({ stateDir, service: profile.keychainService, pipeline: pipelineConfig });
 await settings.load();
 let deploySecret = null;
-const leaks = createSecretGuard({ secrets: () => [portalToken(stateDir), settings.token(), deploySecret] });
+// Telegram (optional, tg.js): the saved session (npm run login:tg) logs in as the owner, so it and the API hash are secrets too.
+const tgSession = (() => {
+  try { return readFileSync(join(BRIDGE, 'auth-tg', 'session'), 'utf8').trim(); } catch { return ''; }
+})();
+const leaks = createSecretGuard({ secrets: () => [portalToken(stateDir), settings.token(), deploySecret, tgSession, process.env.TG_API_HASH] });
 const notifier = createNotifier({ leaks });
 // Commit of the wha-me repo (the skill lives in it), recorded on every agent run.
 const skillCommit = (() => {
@@ -82,6 +89,8 @@ const topics = createTopics({ profile, file: join(stateDir, 'topics.db') });
 const memoryChats = createMemoryChats({ file: join(stateDir, 'memory-chats.json') });
 // Chats in neither list (no text), offered in the portal's Memoria view.
 const seenChats = createSeenChats({ file: join(stateDir, 'seen-chats.json') });
+// Explicit cross-channel identity (WhatsApp <-> Telegram), edited in the portal and read live: names never link people.
+const contactLinks = createContactLinks({ file: join(stateDir, 'contact-links.json') });
 
 // The portal starts first so it can show the QR while WhatsApp is not linked yet.
 const port = Number(process.env.PORTAL_PORT ?? 4747);
@@ -102,7 +111,7 @@ const askContact = (jid, note) => {
   return bridge.askContact(jid, note);
 };
 const portal = await startPortal({ profile, knowledge, pipeline: pipelineConfig, stateDir, requestsDir: workspace.requestsDir, contactsFile: join(BRIDGE, 'contacts.json'), port, sendMessage, sendSticker, selfJid: () => (bridge ? wa.selfJid : null), requests, askContact, settings, leaks,
-  onRequestAction: (id, action) => pipeline?.onAction(id, action), topics, memoryChats, seenChats })
+  onRequestAction: (id, action) => pipeline?.onAction(id, action), topics, memoryChats, seenChats, contactLinks })
   .catch((e) => console.error(`portal did not start (${e.message}); the QR is still printed here.`));
 const url = `http://127.0.0.1:${portal?.address().port ?? port}`;
 if (portal) console.log(`portal en ${url}`);
@@ -120,13 +129,8 @@ const agent = withFreshCode(createAgent({ profile, workspace, knowledge }), prod
 
 const waFile = join(stateDir, 'wa.json');
 const waAlerts = createWaAlerts({ alert: notifier.alert, url });
-const wa = await connectWa({
-  authDir: join(BRIDGE, 'auth'),
-  onStatus: (s) => {
-    writeFileSync(`${waFile}.tmp`, JSON.stringify(s));
-    renameSync(`${waFile}.tmp`, waFile);
-    waAlerts(s);
-  },
+// The same gates for WhatsApp and Telegram.
+const gates = {
   // Audios are only downloaded/transcribed for allowlisted contacts (the self-chat is always allowed inside wa.js);
   // in an allowlisted group, only for its respondTo members. Memory-only chats: every audio (local STT, no cost).
   // The same gate saves their documents to state/media/ (never read by an agent); the self-chat gets the path.
@@ -137,10 +141,6 @@ const wa = await connectWa({
   },
   allowGroup: (jid) => core.lookupContact(contacts, jid)?.type === 'group' || core.lookupContact(memoryChats.list(), jid)?.kind === 'group',
   onSkippedGroup: (jid, at, subject) => seenChats.record({ jid, name: subject, kind: 'group', at }),
-  saveDocument: createMediaStore({ dir: join(stateDir, 'media') }).save,
-  // bridge.say runs the secret guard; before the bridge exists the line only goes to the log.
-  notice: (text) => (bridge ? bridge.say(text) : console.log(text)),
-  nameOf: (jid) => (core.lookupContact(contacts, jid) ?? core.lookupContact(memoryChats.list(), jid))?.name ?? jid,
   // Images are described for 1:1 contacts.json chats, and in the self-chat only while /simular runs (otherwise bridge.js
   // drops non-command self-chat text, so the run would be wasted): never groups, memory-only or unknown chats.
   // Context: the chat's last 10 transcript entries, read before this message is appended.
@@ -154,7 +154,28 @@ const wa = await connectWa({
     const path = await imageStore.save({ id, fileName: `imagen.${ext}`, at, buf });
     return agent.describeImage({ path, caption, context: store.getTranscript(chatJid).slice(-10) });
   },
+};
+const wa = await connectWa({
+  authDir: join(BRIDGE, 'auth'),
+  onStatus: (s) => {
+    writeFileSync(`${waFile}.tmp`, JSON.stringify(s));
+    renameSync(`${waFile}.tmp`, waFile);
+    waAlerts(s);
+  },
+  ...gates,
+  saveDocument: createMediaStore({ dir: join(stateDir, 'media') }).save,
+  // bridge.say runs the secret guard; before the bridge exists the line only goes to the log.
+  notice: (text) => (bridge ? bridge.say(text) : console.log(text)),
+  nameOf: (jid) => `${CHANNEL_LABEL[channelOf(jid)]} · ${(core.lookupContact(contacts, jid) ?? core.lookupContact(memoryChats.list(), jid))?.name ?? jid}`,
 });
+// Telegram only with TG_API_ID + TG_API_HASH and a saved session; otherwise (or if it fails) the bridge is WhatsApp only.
+const { TG_API_ID, TG_API_HASH } = process.env;
+const tg = TG_API_ID && TG_API_HASH && tgSession
+  ? await import('./tg.js').then(({ connectTg }) => connectTg({ apiId: TG_API_ID, apiHash: TG_API_HASH, session: tgSession, ...gates }))
+    .catch((e) => { console.error(`Telegram did not start (${e.message}); WhatsApp only.`); return null; })
+  : null;
+// What the bridge sends and hears through: each chat on its own channel, the self-chat on WhatsApp.
+const transport = createRouter({ wa, tg });
 
 const clock = {
   now: () => new Date(),
@@ -164,8 +185,8 @@ const clock = {
 };
 
 bridge = createBridge({
-  profile, workspace, wa, store, agent, clock, contacts, selfJid: wa.selfJid, core,
-  health: () => checkHealth(knowledge.healthUrls), leaks, topics, archivist: createArchivist({ profile, topics, run: claudeRunner(), leaks }), memoryChats, seenChats, trace: createConsoleTrace({ root: workspace.root, skill: skillDir(profile) }),
+  profile, workspace, wa: transport, store, agent, clock, contacts, selfJid: wa.selfJid, core,
+  health: () => checkHealth(knowledge.healthUrls), leaks, topics, archivist: createArchivist({ profile, topics, run: claudeRunner(), leaks }), memoryChats, contactLinks, seenChats, trace: createConsoleTrace({ root: workspace.root, skill: skillDir(profile) }),
   notify: notifier.alert, runLog, actions,
   feedback, learner: createLearner({ profile, feedback, agent, healthUrls: knowledge.healthUrls, tenants: knowledge.tenants, repoDir: dirname(BRIDGE), proposalsDir: join(stateDir, 'proposals'), leaks }),
   portalLink: () => loginLink(stateDir), requests, stageLock,
@@ -181,7 +202,7 @@ const steps = {
   }),
 };
 pipeline = createPipeline({ requests, runLog, state: () => store.getState(), enabled: settings.pipelineEnabled, say: bridge.say, steps });
-wa.onMessage((msg) => bridge.handleMessage(msg).catch((e) => console.error('handleMessage failed:', e)));
+transport.onMessage((msg) => bridge.handleMessage(msg).catch((e) => console.error('handleMessage failed:', e)));
 await bridge.restorePending();
 void bridge.catchUpArchive();
 bridge.processQueue();
@@ -191,4 +212,4 @@ setInterval(() => pipeline.kick(), 60 * 1000).unref();
 // Requests held because the migration target was down resume once it answers (no-op for a target without reachable()).
 const preprodWait = createMigrationWait({ requests, target: pipelineConfig.migrations, kick: () => pipeline.kick() });
 setInterval(() => preprodWait.check().catch((e) => console.error('preprod wait failed:', e.message)), 10 * 60 * 1000).unref();
-console.log(`bridge up as ${wa.selfJid}; mode ${JSON.stringify(store.getState())}`);
+console.log(`bridge up as ${wa.selfJid}${tg ? ' + Telegram' : ''}; mode ${JSON.stringify(store.getState())}`);

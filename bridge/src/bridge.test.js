@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStageLock } from './pipeline.js';
-import { ARCHIVE_BATCH, ARCHIVE_QUIET_MS, createBridge } from './bridge.js';
+import { ARCHIVE_BATCH, ARCHIVE_QUIET_MS, canonicalChat, createBridge, knownPeopleOf, personKey } from './bridge.js';
 import { createNotifier } from './notify.js';
 import { parseAgentOutput, parseJobOutput } from './core/parse.js';
 import { applyCommand } from './core/state.js';
@@ -71,7 +71,7 @@ function fakeCore(over = {}) {
   };
 }
 
-function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = [], dir = mkdtempSync(join(tmpdir(), 'wa-bridge-')), topics, topicLines, archiveRun, memoryChats = [], tracer, notify, runLog, actions, feedback, learner, contacts: cs = contacts, groups = {}, portalLink, requests, stageLock, seenChats = createSeenChats({ file: join(dir, 'seen-chats.json') }) } = {}) {
+function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = [], dir = mkdtempSync(join(tmpdir(), 'wa-bridge-')), topics, topicLines, archiveRun, memoryChats = [], links = [], tracer, notify, runLog, actions, feedback, learner, contacts: cs = contacts, groups = {}, portalLink, requests, stageLock, seenChats = createSeenChats({ file: join(dir, 'seen-chats.json') }) } = {}) {
   const log = [];
   const logs = [];
   const alerts = [];
@@ -120,7 +120,7 @@ function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = 
   const leaks = createSecretGuard({ readFile: () => `//npm.pkg.github.com/:_authToken=${NPM_TOKEN}\n`, secrets: [PORTAL_TOKEN] });
   const archiver = createArchivist({ profile: PROFILE, topics, run: archiveRun ?? (async () => ({ text: '{"ops":[]}', costUsd: 0.001 })), leaks, now: () => t });
   const archivist = { archive: (a) => { calls.archive.push(a); return archiver.archive(a); } };
-  const make = () => createBridge({ profile: PROFILE, workspace: { root: ROOT }, wa, store, agent, clock, contacts: cs, selfJid: SELF, core: c, health, leaks, topics, archivist, memoryChats: { list: () => memoryChats }, trace: tracer, notify: notify ?? ((a) => alerts.push(a)), runLog, actions, feedback, learner, portalLink, requests, stageLock, seenChats, log: (...a) => logs.push(a.join(' ')) });
+  const make = () => createBridge({ profile: PROFILE, workspace: { root: ROOT }, wa, store, agent, clock, contacts: cs, selfJid: SELF, core: c, health, leaks, topics, archivist, memoryChats: { list: () => memoryChats }, contactLinks: { list: () => links }, trace: tracer, notify: notify ?? ((a) => alerts.push(a)), runLog, actions, feedback, learner, portalLink, requests, stageLock, seenChats, log: (...a) => logs.push(a.join(' ')) });
   const bridge = make();
   let m = 0;
   const msg = (chatJid, text, extra = {}) =>
@@ -175,7 +175,7 @@ test('shadow: out of hours still drafts right away', async () => {
   await s.msg(BEA, 'hola');
   await s.advance(15_000);
   assert.equal(s.calls.reply.length, 1);
-  assert.ok(s.toSelf().some((m) => m.startsWith('[sombra]')));
+  assert.ok(s.toSelf().some((m) => m.startsWith('[sombra · WA]')));
 });
 
 test('paused: does nothing when debounce fires', async () => {
@@ -263,7 +263,7 @@ test('shadow on: drafts go to self-chat, nothing to contact, no job runs', async
   assert.equal(s.calls.job.length, 0);
   const self = s.toSelf();
   assert.equal(self.length, 1);
-  assert.ok(self[0].startsWith('[sombra] → Bea:'));
+  assert.ok(self[0].startsWith('[sombra · WA] → Bea:'));
   for (const part of ['hola', 'ahorita lo veo', 'no carga', 'arreglar boton', '## Goal\nfix']) assert.ok(self[0].includes(part), part);
 });
 
@@ -486,7 +486,7 @@ test('Alex writes during the reply run: nothing sent, no job, draft posted as [d
   await s.advance(DELAY);
   assert.deepEqual(s.toContact(BEA), []);
   assert.equal(s.store.getJobs().length + s.calls.job.length, 0);
-  const self = s.toSelf().find((m) => m.startsWith('[descartado]'));
+  const self = s.toSelf().find((m) => m.startsWith('[descartado · WA]'));
   assert.ok(self && self.includes('hola') && self.includes('cambio'));
 });
 
@@ -497,7 +497,7 @@ test('paused during the reply run: nothing sent, no job, [descartado]', async ()
   await s.advance(DELAY);
   assert.deepEqual(s.toContact(BEA), []);
   assert.equal(s.store.getJobs().length, 0);
-  assert.ok(s.toSelf().some((m) => m.startsWith('[descartado]')));
+  assert.ok(s.toSelf().some((m) => m.startsWith('[descartado · WA]')));
 });
 
 test('hours close during the reply run: nothing sent, rescheduled to next opening + delay', async () => {
@@ -524,7 +524,7 @@ test('job success while Alex is active in the chat: held, posted to self-chat fo
   await s.msg(BEA, 'uno');
   await s.advance(DELAY);
   assert.deepEqual(s.toContact(BEA), []);
-  assert.ok(s.toSelf().some((m) => m.startsWith('[no enviado]') && m.includes('Listo ya quedó')));
+  assert.ok(s.toSelf().some((m) => m.startsWith('[no enviado · WA]') && m.includes('Listo ya quedó')));
 });
 
 // --- pending replies survive restarts (minor 7) ---
@@ -972,7 +972,7 @@ test('reply run gets the topics recalled for this chat, the contact and this tur
   await s.msg(BEA, 'lo del REQ-0027?');
   await s.advance(DELAY);
   assert.deepEqual(s.calls.recall.map(({ person, chat, text }) => ({ person, chat, text })),
-    [{ person: 'Bea', chat: { jid: BEA, name: 'Bea', kind: 'private' }, text: 'ya quedo\nlo del REQ-0027?' }]);
+    [{ person: 'bea', chat: { jid: BEA, name: 'Bea', kind: 'private' }, text: 'ya quedo\nlo del REQ-0027?' }]);
   assert.deepEqual(s.calls.reply[0].topics, TOPICS);
   assert.equal('memory' in s.calls.reply[0], false);
 });
@@ -1163,6 +1163,62 @@ test('archive identity from jids: a stranger with pushName Ciro is opaque, a con
   assert.deepEqual(s.calls.reply[0].topics, [], 'what the stranger said is never the real Ciro\'s');
 });
 
+// Two people called Carlos: one on WhatsApp (phone + LID, same name), one on Telegram.
+const CARLOS_WA = '5218111111111@s.whatsapp.net';
+const CARLOS_LID = '424242@lid';
+const CARLOS_TG = 'tg:123';
+const CARLOSES = [{ jid: CARLOS_WA, name: 'Carlos' }, { jid: CARLOS_LID, name: 'Carlos' }, { jid: CARLOS_TG, name: 'Carlos' }];
+
+test('identity: an equal name merges only on the same channel; an explicit link makes one person under the WhatsApp key', () => {
+  assert.deepEqual(canonicalChat(CARLOS_LID, CARLOSES), { jid: CARLOS_WA, name: 'Carlos', kind: 'private' }, 'phone + LID still merge');
+  assert.deepEqual(canonicalChat(CARLOS_TG, CARLOSES), { jid: CARLOS_TG, name: 'Carlos', kind: 'private' });
+  assert.deepEqual([personKey(CARLOS_WA, CARLOSES), personKey(CARLOS_LID, CARLOSES), personKey(CARLOS_TG, CARLOSES)], ['carlos', 'carlos', 'tg:carlos']);
+  assert.match(personKey('tg:777', CARLOSES), /^tg:[0-9a-f]{10}$/, 'an unlisted Telegram id is opaque');
+  assert.deepEqual(knownPeopleOf(CARLOSES), [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'tg:carlos' }]);
+  // Linked (Telegram listed first): the WhatsApp contacts.json member gives the key and the canonical chat.
+  const links = [{ jids: [CARLOS_TG, CARLOS_LID] }];
+  assert.deepEqual(canonicalChat(CARLOS_TG, CARLOSES, [], links), { jid: CARLOS_WA, name: 'Carlos', kind: 'private' });
+  assert.equal(personKey(CARLOS_TG, CARLOSES, links), 'carlos');
+  assert.deepEqual(knownPeopleOf(CARLOSES, [], links), [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'carlos' }]);
+  // A link without a WhatsApp contacts.json member: its first member's key.
+  const memory = [{ jid: 'tg:9', name: 'Charly', kind: 'private' }];
+  assert.equal(personKey('seen@s.whatsapp.net', CARLOSES, [{ jids: ['tg:9', 'seen@s.whatsapp.net'] }]), personKey('tg:9', CARLOSES));
+  assert.equal(canonicalChat('tg:9', CARLOSES, memory, [{ jids: ['tg:9', CARLOS_TG] }]).jid, CARLOS_TG, 'contacts.json before memory-only');
+});
+
+test('two unlinked Carloses (WhatsApp, Telegram) stay two people in archive and recall; linked they share one; unlinked again they split', async () => {
+  const links = [];
+  const s = setup({ contacts: [...contacts, ...CARLOSES], links });
+  await s.msg(CARLOS_LID, 'mando las sedes de Monterrey');
+  await s.msg(CARLOS_TG, 'mando el oficio de Saltillo');
+  await s.advance(DELAY);
+  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid]), [['carlos', CARLOS_WA], ['tg:carlos', CARLOS_TG]]);
+  await s.advance(ARCHIVE_QUIET_MS);
+  const byChat = (calls) => Object.fromEntries(calls.map((a) => [a.chat.jid, a.entries.filter((e) => e.author === 'CONTACTO').map((e) => [e.person, e.text])]));
+  assert.deepEqual(byChat(s.calls.archive), {
+    [CARLOS_WA]: [['carlos', 'mando las sedes de Monterrey']], [CARLOS_TG]: [['tg:carlos', 'mando el oficio de Saltillo']],
+  });
+  const known = s.calls.archive[0].knownPeople.filter((p) => p.name === 'Carlos');
+  assert.deepEqual(known, [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'tg:carlos' }]);
+
+  links.push({ jids: [CARLOS_WA, CARLOS_TG] }); // linked in the portal: read live, no restart
+  s.calls.archive.length = 0;
+  s.calls.recall.length = 0;
+  await s.msg(CARLOS_TG, 'ya llegó el oficio');
+  await s.advance(DELAY);
+  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid]), [['carlos', CARLOS_WA]]);
+  await s.advance(ARCHIVE_QUIET_MS);
+  assert.deepEqual(byChat(s.calls.archive), { [CARLOS_WA]: [['carlos', 'ya llegó el oficio']] }, 'both jids feed the WhatsApp chat');
+
+  links.length = 0; // unlinked
+  s.calls.archive.length = 0;
+  await s.msg(CARLOS_TG, 'otra cosa');
+  await s.advance(DELAY + ARCHIVE_QUIET_MS);
+  // The Telegram chat catches up from its own cursor: what was said while linked is archived again under its own person
+  // (what the shared person already holds stays there; see the portal's unlink warning).
+  assert.deepEqual(byChat(s.calls.archive), { [CARLOS_TG]: [['tg:carlos', 'ya llegó el oficio'], ['tg:carlos', 'otra cosa']] });
+});
+
 test('a memory-only chat named like a contacts.json contact is not that contact: own chat key, opaque person', async () => {
   const MO = 'impostor@s.whatsapp.net';
   const s = setup({ memoryChats: [{ jid: MO, name: 'Bea', kind: 'private' }, { jid: 'fabi@s.whatsapp.net', name: 'Fabi', kind: 'private' }] });
@@ -1233,7 +1289,7 @@ for (const [name, opts, prep] of [
 test('/simular recalls topics (read-only) and never feeds the archivist, neither reply nor job', async () => {
   const s = await simWithSpec({ topicLines: TOPICS, jobSim: simTrace(), core: { parseJobOutput } });
   await self(s, '/simular job');
-  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid, q.text]), [['Bea', BEA, 'oye no carga el boton']]);
+  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid, q.text]), [['bea', BEA, 'oye no carga el boton']]);
   assert.deepEqual(s.calls.reply[0].topics, TOPICS);
   assert.equal(s.calls.jobSim.length, 1);
   assert.deepEqual(await bridgeEvents(s), []);
@@ -1557,7 +1613,7 @@ const assertFallback = (s, reason) => {
   assert.match(h.summary, reason);
   assert.equal(s.alerts.length, 1);
   assert.match(s.alerts[0].message, reason);
-  assert.ok(s.toSelf().some((m) => /HANDOFF · Contacto A/.test(m) && reason.test(m)));
+  assert.ok(s.toSelf().some((m) => /HANDOFF · WA · Contacto A/.test(m) && reason.test(m)));
 };
 
 test('approve: happy path -> adapter called with the contact and directive, agent reply sent, one note per action, run-log event', async () => {
@@ -1580,17 +1636,17 @@ test('approve: actions none() -> the agent reply is never sent; neutral ack + bl
 
 test('approve refused: the handoff next step is the adapter\'s reviewHint, else the generic one', async () => {
   const generic = await approveRun({ actions: noActions() });
-  assert.ok(generic.s.toSelf().some((m) => /HANDOFF · Contacto A/.test(m) && m.includes('\nnext: Alex revisa la solicitud')), generic.s.toSelf().join('\n'));
+  assert.ok(generic.s.toSelf().some((m) => /HANDOFF · WA · Contacto A/.test(m) && m.includes('\nnext: Alex revisa la solicitud')), generic.s.toSelf().join('\n'));
   const own = await approveRun({ actions: { ...fakeActions(), reviewHint: (p) => `${p.name} la revisa en el panel` }, contact: autoContact({ autoApprove: undefined }) });
-  assert.ok(own.s.toSelf().some((m) => /HANDOFF · Contacto A/.test(m) && m.includes('\nnext: Alex la revisa en el panel')), own.s.toSelf().join('\n'));
+  assert.ok(own.s.toSelf().some((m) => /HANDOFF · WA · Contacto A/.test(m) && m.includes('\nnext: Alex la revisa en el panel')), own.s.toSelf().join('\n'));
   const bare = await approveRun({ contact: autoContact({ autoApprove: undefined }) });
-  assert.ok(bare.s.toSelf().some((m) => /HANDOFF · Contacto A/.test(m) && m.includes('\nnext: Alex revisa la solicitud')), bare.s.toSelf().join('\n'));
+  assert.ok(bare.s.toSelf().some((m) => /HANDOFF · WA · Contacto A/.test(m) && m.includes('\nnext: Alex revisa la solicitud')), bare.s.toSelf().join('\n'));
 });
 
 test('approve: actions none() in shadow -> says it would not approve', async () => {
   const { s } = await approveRun({ shadow: true, actions: noActions() });
   assert.deepEqual(s.toContact(AUTO), []);
-  assert.ok(s.toSelf().includes('[sombra] no aprobaría X-26: aprobación automática no configurada'));
+  assert.ok(s.toSelf().includes('[sombra · WA] no aprobaría X-26: aprobación automática no configurada'));
 });
 
 test('approve: the adapter refuses -> fallback naming the reason', async () => {
@@ -1625,20 +1681,20 @@ test('approve: shadow with a blocking handoff says it would not approve', async 
   const incident = { type: 'incident', blocking: true, fields: { summary: 'x' } };
   const { s, actions } = await approveRun({ shadow: true, out: { ...APPROVE_OUT, handoff: incident } });
   assert.equal(actions.calls.length, 0);
-  assert.ok(s.toSelf().some((m) => /\[sombra\] no aprobaría X-26: .*bloqueante/.test(m)));
+  assert.ok(s.toSelf().some((m) => /\[sombra · WA\] no aprobaría X-26: .*bloqueante/.test(m)));
 });
 
 test('approve: shadow -> adapter never called, [sombra] aprobaría note, nothing to contact', async () => {
   const { s, actions } = await approveRun({ shadow: true });
   assert.equal(actions.calls.length, 0);
   assert.deepEqual(s.toContact(AUTO), []);
-  assert.ok(s.toSelf().includes('[sombra] aprobaría X-26'));
+  assert.ok(s.toSelf().includes('[sombra · WA] aprobaría X-26'));
 });
 
 test('approve: shadow with a failing static gate says it would not approve', async () => {
   const { s, actions } = await approveRun({ shadow: true, contact: autoContact({ autoApprove: false }) });
   assert.equal(actions.calls.length, 0);
-  assert.ok(s.toSelf().some((m) => /^\[sombra\] no aprobaría X-26: el contacto no tiene/.test(m)));
+  assert.ok(s.toSelf().some((m) => /^\[sombra · WA\] no aprobaría X-26: el contacto no tiene/.test(m)));
 });
 
 test('approve: usted contact gets the usted canned reply', async () => {
@@ -1669,7 +1725,7 @@ test('approve several: a failure mid-way -> note for the action already done, th
 test('approve several: shadow names every id', async () => {
   const { s, actions } = await approveRun({ shadow: true, out: MULTI_OUT });
   assert.equal(actions.calls.length, 0);
-  assert.ok(s.toSelf().includes('[sombra] aprobaría X-27, X-28'));
+  assert.ok(s.toSelf().includes('[sombra · WA] aprobaría X-27, X-28'));
 });
 
 test('approve several: a blocking handoff still vetoes them all', async () => {
@@ -1793,7 +1849,7 @@ test('group live: a teammate writing during the run discards the draft', async (
   await s.gmsg(IKER, 'no me carga');
   await s.advance(DELAY);
   assert.deepEqual(s.toContact(GRP), []);
-  assert.ok(s.toSelf().some((m) => m.startsWith('[descartado]')));
+  assert.ok(s.toSelf().some((m) => m.startsWith('[descartado · WA]')));
 });
 
 test('group shadow: draft goes to self-chat labelled with the group and who triggered it, nothing to the group', async () => {
@@ -1802,7 +1858,7 @@ test('group shadow: draft goes to self-chat labelled with the group and who trig
   await s.advance(DELAY);
   assert.deepEqual(s.toContact(GRP), []);
   const [draft] = s.toSelf();
-  assert.ok(draft.startsWith('[sombra] → Grupo Demo (grupo, responde a Contacto C):'), draft);
+  assert.ok(draft.startsWith('[sombra · WA] → Grupo Demo (grupo, responde a Contacto C):'), draft);
   assert.ok(draft.includes('a mi me carga normal'));
 });
 
@@ -2073,7 +2129,7 @@ test('feature-request handoff (real): one request, the PETICIÓN self-chat line 
   const list = requests.list();
   assert.equal(list.length, 1);
   assert.deepEqual([list[0].status, list[0].shadow, list[0].contactName], ['nueva', false, 'Bea']);
-  assert.ok(s.toSelf().includes(`PETICIÓN #${list[0].id} · Bea: reporte de becas por colonia`));
+  assert.ok(s.toSelf().includes(`PETICIÓN #${list[0].id} · WA · Bea: reporte de becas por colonia`));
   assert.deepEqual(await bridgeEvents(s), [`[evento] petición #${list[0].id} registrada: reporte de becas por colonia (nueva)`]);
 });
 
@@ -2084,7 +2140,7 @@ test('feature-request handoff in shadow: request flagged shadow, [sombra] line, 
   await s.advance(DELAY);
   const [r] = requests.list();
   assert.equal(r.shadow, true);
-  assert.ok(s.toSelf().includes(`[sombra] PETICIÓN #${r.id} · Bea: reporte de becas por colonia`));
+  assert.ok(s.toSelf().includes(`[sombra] PETICIÓN #${r.id} · WA · Bea: reporte de becas por colonia`));
   assert.deepEqual(await bridgeEvents(s), [`(sombra: borrador no enviado) [evento] petición #${r.id} registrada: reporte de becas por colonia (nueva)`]);
 });
 
@@ -2133,7 +2189,7 @@ test('askContact honors shadow (draft to self-chat only) and the secret guard', 
   await shadow.advance(0);
   assert.equal(shadow.calls.reply[0].note, 'pregunta volumen');
   assert.deepEqual(shadow.toContact(BEA), []);
-  assert.ok(shadow.toSelf()[0].startsWith('[sombra] → Bea:'));
+  assert.ok(shadow.toSelf()[0].startsWith('[sombra · WA] → Bea:'));
   const leak = withRequests({ state: { shadow: false }, reply: { bubbles: ['ghp_abc'], handoff: null, implement: null } });
   leak.bridge.askContact(BEA, 'x');
   await leak.advance(0);
@@ -2252,7 +2308,7 @@ test('live: replied for real under global shadow; other contacts still drafted',
   await s.advance(DELAY);
   assert.deepEqual(s.toContact(ROBIN), ['hola']);
   assert.deepEqual(s.toContact(BEA), []);
-  assert.ok(s.toSelf().some((t) => t.startsWith('[sombra]')), 'Bea drafted');
+  assert.ok(s.toSelf().some((t) => t.startsWith('[sombra · WA]')), 'Bea drafted');
 });
 
 test('live: hours apply again unless anyHour', async () => {
@@ -2262,4 +2318,33 @@ test('live: hours apply again unless anyHour', async () => {
     await s.advance(DELAY);
     assert.deepEqual(s.toContact(ROBIN), sent);
   }
+});
+
+// --- channel labels: every self-chat line about a chat says where it comes from (WA / TG) ---
+
+const CARLOS = 'tg:42';
+const withCarlos = [...contacts, { jid: CARLOS, name: 'Carlos', register: 'tu', tenant: 'demo', canTriggerImplementation: false }];
+const bugReply = { bubbles: ['va'], handoff: { type: 'bug', blocking: false, fields: { summary: 'no carga' }, raw: '' }, implement: null };
+
+test('shadow drafts and handoffs name the channel: [sombra · TG] for Telegram, [sombra · WA] for WhatsApp', async () => {
+  const s = setup({ contacts: withCarlos, reply: bugReply });
+  await s.msg(CARLOS, 'oye');
+  await s.msg(BEA, 'oye');
+  await s.advance(DELAY);
+  const self = s.toSelf();
+  assert.ok(self.some((m) => m.startsWith('[sombra · TG] → Carlos:') && m.includes('HANDOFF · TG · Carlos')), self.join('\n'));
+  assert.ok(self.some((m) => m.startsWith('[sombra · WA] → Bea:') && m.includes('HANDOFF · WA · Bea')), self.join('\n'));
+});
+
+test('live: a Telegram chat is answered on its own tg: jid; its handoff and [descartado] say TG', async () => {
+  const s = setup({ contacts: withCarlos, state: { shadow: false }, reply: bugReply });
+  await s.msg(CARLOS, 'oye');
+  await s.advance(DELAY);
+  assert.deepEqual(s.toContact(CARLOS), ['va']);
+  assert.ok(s.toSelf().some((m) => m.startsWith('HANDOFF · TG · Carlos')), s.toSelf().join('\n'));
+  let d;
+  d = setup({ contacts: withCarlos, state: { shadow: false }, reply: () => { d.store.setState({ ...d.store.getState(), paused: true }); return bugReply; } });
+  await d.msg(CARLOS, 'oye');
+  await d.advance(DELAY);
+  assert.ok(d.toSelf().some((m) => m.startsWith('[descartado · TG] → Carlos:')), d.toSelf().join('\n'));
 });

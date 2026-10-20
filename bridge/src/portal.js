@@ -4,10 +4,11 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { dirname, extname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createContactLinks } from './contact-links.js';
 import { lookupContact } from './core/allowlist.js';
 import { FEEDBACK_TABLE, LIST_SQL as FEEDBACK_LIST, pairRow } from './feedback.js';
 import { createMemoryChats } from './memory-chats.js';
-import { chatDetail, chatList, costTotals, parseHistory, preprodOf, runDetail, runRow, stationOf, subagents } from './portal-view.js';
+import { chatDetail, chatList, costTotals, knownChats, linkView, parseHistory, preprodOf, runDetail, runRow, stationOf, subagents } from './portal-view.js';
 import { qrSvg } from './qr-svg.js';
 import { ACTIONS, createRequests } from './requests.js';
 import { REDACTED, RUNS_DB } from './run-log.js';
@@ -20,7 +21,7 @@ import { createTopics } from './topics.js';
 
 // View of the bridge state: reads files on each request and never writes them. The writes are replying to a chat (through
 // the bridge's sendMessage callback, absent when run alone with npm run portal), sending a sticker (sendSticker, likewise), the owner's Peticiones actions (requests.js)
-// the GitHub token in Ajustes (settings.js) and Memoria edits (topics.js, memory-chats.js, seen-chats.js).
+// the GitHub token in Ajustes (settings.js) and Memoria edits (topics.js, memory-chats.js, seen-chats.js, contact-links.js).
 // Every request but /login needs the session cookie from /login?k=<state/portal-token>, whatever its Host: loopback is not
 // trust, since code run by the pipeline on this Mac (the Peticiones gate, the agents) can reach it and forge Host/Origin.
 const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'";
@@ -184,7 +185,7 @@ const DRAFT_SQL = `SELECT decision_json FROM runs WHERE jid = ? AND kind = 'repl
 // requests: the bridge's Peticiones store (opened here when absent); askContact(jid, note): the bridge's "Pedir info" reply
 // run (absent = 503); requestsDir: evidence files, one dir per request; settings: Ajustes (GitHub token).
 // onRequestAction(id, action): after a successful action (the bridge's pipeline: approve enqueues, cancel aborts the step).
-// topics: the bridge's topic memory (opened here on first use when absent).
+// topics: the bridge's topic memory (opened here on first use when absent). contactLinks: Enlazar contactos (contact-links.js).
 // portal.html with the owner's tokens filled in: __OWNER_TAG__ (persisted author), __OWNER_KEY__ (person/actor key),
 // __OWNER_NAME__ (comments only), __TENANTS__ (tenant id -> label, from config knowledge.tenants[id].label) and __REPOS__
 // (the pipeline repos the GitHub token must write to, config pipeline.repos). The config validates them (tag: [A-Z0-9_];
@@ -204,7 +205,7 @@ export function startPortal({
   profile, knowledge, pipeline, stateDir, contactsFile, port = 4747, host = '127.0.0.1', now = Date.now, sendMessage = null, requests = null, askContact = null,
   requestsDir, settings = createSettings({ stateDir, service: profile.keychainService }), leaks = null, onRequestAction = () => {},
   topics = null, memoryChats = createMemoryChats({ file: join(stateDir, 'memory-chats.json') }),
-  seenChats = createSeenChats({ file: join(stateDir, 'seen-chats.json') }), sendSticker = null, stickers = createStickerStore(), selfJid = () => null,
+  seenChats = createSeenChats({ file: join(stateDir, 'seen-chats.json') }), contactLinks = createContactLinks({ file: join(stateDir, 'contact-links.json') }), sendSticker = null, stickers = createStickerStore(), selfJid = () => null,
 }) {
   const page = portalPage(profile, { tenants: knowledge?.tenants, repos: pipeline?.repos });
   const token = portalToken(stateDir);
@@ -217,6 +218,7 @@ export function startPortal({
     const self = selfJid();
     return self ? { ...v, contacts: [...v.contacts, { jid: self, name: 'Tú' }], history: { [self]: [], ...v.history } } : v;
   };
+  const linkSources = () => ({ contacts: readJson(contactsFile, []), memory: memoryChats.list(), seen: seenChats.list() });
   const canSend = (jid) => !!lookupContact(readJson(contactsFile, []), jid) || (!!jid && jid === selfJid());
   const mac = (at) => createHmac('sha256', token).update(`${COOKIE}:${at}`).digest('base64url');
   const sessionOk = (value) => {
@@ -259,6 +261,11 @@ export function startPortal({
       if (pathname === '/api/memory/chats/remove') {
         return memoryEdit(req, reqHost, json, ({ jid }) => memoryChats.list().some((c) => c.jid === jid) && (memoryChats.remove(jid), true));
       }
+      // Only jids the owner can see, never a group, never a jid already linked (contact-links.js refuses: 400 with why).
+      if (pathname === '/api/links/link') return memoryEdit(req, reqHost, json, ({ a, b }) => (contactLinks.link(a, b, knownChats(linkSources())), true), 400);
+      // ponytail: unlinking only splits what comes next; facts already stored under the shared person stay there (the page
+      // warns). Splitting them back needs per-fact source jids, add when it matters.
+      if (pathname === '/api/links/unlink') return memoryEdit(req, reqHost, json, ({ jid }) => contactLinks.unlink(jid));
     }
     if (req.method !== 'GET') return json(405, { error: 'solo lectura' });
     try {
@@ -299,6 +306,7 @@ export function startPortal({
         return res.end(buf);
       }
       if (pathname === '/api/memory/chats') return json(200, { feeding: memoryChats.list(), recent: seenChats.list() });
+      if (pathname === '/api/links') return json(200, linkView({ ...linkSources(), links: contactLinks.list() }));
       if (pathname === '/api/costs') {
         const t = now();
         return json(200, costTotals(readRuns(stateDir, [], (db) => db.prepare('SELECT contact_name, started_at, cost_usd FROM runs WHERE started_at >= ?').all(t - MONTH_MS)), t, profile.timezone));
@@ -416,8 +424,8 @@ export function startPortal({
     }
   }
 
-  // Memoria edits: the same CSRF checks as every POST; fn(body) -> true, or false = 404.
-  async function memoryEdit(req, reqHost, json, fn) {
+  // Memoria edits: the same CSRF checks as every POST; fn(body) -> true, or false = 404; a throw is failStatus with its message.
+  async function memoryEdit(req, reqHost, json, fn, failStatus = 500) {
     const refused = csrfRefusal(req, reqHost);
     if (refused) return json(refused.status, { error: refused.error });
     let body;
@@ -425,15 +433,15 @@ export function startPortal({
     try {
       return fn(body) ? json(200, { ok: true }) : json(404, { error: 'no encontrado' });
     } catch (e) {
-      return json(500, { error: e.message });
+      return json(failStatus, { error: e.message });
     }
   }
 
-  // "Alimentar memoria": a seen chat moves to memory-chats.json (named by its number if WhatsApp gave no name).
+  // "Alimentar memoria": a seen chat moves to memory-chats.json (named by its number, or Telegram id, if it came with no name).
   function feedMemory(jid) {
     const c = seenChats.list().find((x) => x.jid === jid);
     if (!c) return false;
-    memoryChats.add({ jid, name: c.name?.trim() || `+${jid.split('@')[0]}`, kind: c.kind });
+    memoryChats.add({ jid, name: c.name?.trim() || (jid.startsWith('tg:') ? `Telegram ${jid.slice(3)}` : `+${jid.split('@')[0]}`), kind: c.kind });
     seenChats.remove(jid);
     return true;
   }

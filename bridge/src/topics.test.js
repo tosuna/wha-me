@@ -247,3 +247,26 @@ test('cursors per chat', () => {
   assert.equal(topics.cursor(GROUP.jid), 9);
   topics.close();
 });
+
+test('add_participant by a name two known people share (WhatsApp and Telegram "Carlos", not linked) adds nobody', () => {
+  const { topics } = setup();
+  const TG = { jid: 'tg:123', name: 'Carlos', kind: 'private' };
+  const two = [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'tg:carlos' }];
+  const ctx = { chat: TG, entries: [E('owner', 'lo vemos con Carlos')], knownPeople: two };
+  const add = (person, c = ctx) => topics.apply([{ op: 'new_topic', ref: 'a', title: 'Sedes', msg: 0 }, { op: 'add_participant', topic: 'a', person, msg: 0 }], c);
+  assert.equal(add('Carlos').rejected[0].reason, 'unknown person');
+  assert.equal(add('tg:carlos').rejected.length, 0, 'a key is exact');
+  // Linked: both names carry the same key, so the name is not ambiguous.
+  assert.equal(add('Carlos', { ...ctx, knownPeople: [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'carlos' }] }).rejected.length, 0);
+  const b = topics.list().find((t) => t.participants.includes('carlos'));
+  assert.ok(b);
+});
+
+test('recall takes a person key as is: a Telegram key recalls its own topics', () => {
+  const { topics } = setup();
+  const TG = { jid: 'tg:123', name: 'Carlos', kind: 'private' };
+  topics.apply([{ op: 'new_topic', ref: 'a', title: 'Sedes de Monterrey', msg: 0 }, { op: 'add_fact', topic: 'a', text: 'Carlos manda las sedes', msg: 0 }],
+    { chat: TG, entries: [E('tg:carlos', 'te mando las sedes')] });
+  assert.equal(topics.recall({ person: 'tg:carlos', chat: TG, text: 'sedes' }).length, 1);
+  assert.deepEqual(topics.recall({ person: 'carlos', chat: { jid: 'c@s.whatsapp.net', kind: 'private' }, text: 'sedes' }), []);
+});
