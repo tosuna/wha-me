@@ -28,7 +28,8 @@ turn shadow mode off.
 - **Shadow mode** (on by default). Replies are posted to your self-chat as `[sombra]` drafts instead of being sent.
   Toggle with `/sombra on` / `/sombra off`.
 - **Office hours.** With shadow mode off, a reply that falls outside `profile.hours` waits for the next opening.
-- **You take over.** If you write in a chat yourself, the pending reply for it is dropped. `/pausa` stops all replies;
+- **You take over.** If you write in a chat yourself, the pending reply for it is dropped, and with shadow mode off the
+  bridge stays quiet in that chat for 30 minutes (in shadow mode it keeps drafting). `/pausa` stops all replies;
   `/sigue` resumes them.
 - **Secret guard.** Every outbound message is checked against secret patterns (GitHub tokens, private keys, AWS keys,
   Slack tokens, npm registry tokens) and the bridge's own runtime secrets; a match is blocked and you get an alert

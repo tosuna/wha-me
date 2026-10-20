@@ -199,11 +199,19 @@ test('outside hours (live): reschedules to next opening + reply delay', async ()
 });
 
 test('Alex active in chat: does not reply', async () => {
-  const s = setup();
+  const s = setup({ state: { shadow: false } });
   s.store.setLastManualFromMeAt(BEA, s.now() - 60_000);
   await s.msg(BEA, 'hola');
   await s.advance(DELAY);
   assert.equal(s.calls.reply.length, 0);
+});
+
+test('Alex active in chat, shadow on: still drafts (nothing reaches the contact)', async () => {
+  const s = setup();
+  s.store.setLastManualFromMeAt(BEA, s.now() - 60_000);
+  await s.msg(BEA, 'hola');
+  await s.advance(DELAY);
+  assert.equal(s.calls.reply.length, 1);
 });
 
 test('manual fromMe message updates activity and cancels the pending debounce', async () => {

@@ -418,7 +418,8 @@ export function createBridge({
   async function reply(jid) {
     if (store.getState().paused) return;
     if (!shadowFor(jid) && !inHours(jid)) return defer(jid);
-    if (ownerActive(jid)) return;
+    // Shadow drafts even while the owner is in the chat: nothing reaches the contact, the owner sees what the agent would do.
+    if (!shadowFor(jid) && ownerActive(jid)) return;
     if (busy.has(jid)) return schedule(jid, replyDelay(jid));
 
     const contact = contactOf(jid);
