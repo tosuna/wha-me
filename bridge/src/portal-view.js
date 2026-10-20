@@ -1,4 +1,5 @@
 import { lookupContact } from './core/allowlist.js';
+import { channelOf } from './core/channel.js';
 
 // One JSON object per line; a torn or hand-edited line is skipped, never fatal.
 export function parseHistory(text) {
@@ -34,7 +35,8 @@ function summarize(view, jid) {
     name: c?.name ?? 'desconocido',
     register: c?.register ?? null,
     tenant: c?.tenant ?? null,
-    group: c?.type === 'group' || jid.endsWith('@g.us'),
+    channel: channelOf(jid),
+    group: c?.type === 'group' || jid.endsWith('@g.us') || /^tg:-/.test(jid),
     autoApprove: c?.autoApprove === true,
     canTriggerImplementation: c?.canTriggerImplementation === true,
     lastMessage: last,

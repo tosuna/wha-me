@@ -429,11 +429,11 @@ export function startPortal({
     }
   }
 
-  // "Alimentar memoria": a seen chat moves to memory-chats.json (named by its number if WhatsApp gave no name).
+  // "Alimentar memoria": a seen chat moves to memory-chats.json (named by its number, or Telegram id, if it came with no name).
   function feedMemory(jid) {
     const c = seenChats.list().find((x) => x.jid === jid);
     if (!c) return false;
-    memoryChats.add({ jid, name: c.name?.trim() || `+${jid.split('@')[0]}`, kind: c.kind });
+    memoryChats.add({ jid, name: c.name?.trim() || (jid.startsWith('tg:') ? `Telegram ${jid.slice(3)}` : `+${jid.split('@')[0]}`), kind: c.kind });
     seenChats.remove(jid);
     return true;
   }

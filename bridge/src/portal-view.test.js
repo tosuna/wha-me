@@ -243,3 +243,10 @@ test('preprodOf: the preprod step\'s push/pr/note events, each with its github.c
     { at: 6, kind: 'pr', text: 'api: javascript:alert(1) https://evil.example/pull/1', url: null },
   ]);
 });
+
+test('channel: each chat says WhatsApp or Telegram; tg:-… ids are groups even without a contact entry', () => {
+  const data = store({ transcripts: { [BEA]: [msg('CONTACTO', 'a', 1)], 'tg:42': [msg('CONTACTO', 'b', 2)], 'tg:-100555': [msg('CONTACTO', 'c', 3)] } });
+  const v = chatList({ store: data, contacts, history: {} });
+  assert.deepEqual([BEA, 'tg:42', 'tg:-100555'].map((j) => [byJid(v, j).channel, byJid(v, j).group]), [['whatsapp', false], ['telegram', false], ['telegram', true]]);
+  assert.equal(chatDetail({ store: data, contacts, history: {} }, 'tg:42').chat.channel, 'telegram');
+});

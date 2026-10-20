@@ -684,6 +684,13 @@ test('a seen chat without a name is added under its number', async (t) => {
   assert.equal(JSON.parse(readFileSync(join(stateDir, 'memory-chats.json'), 'utf8')).at(-1).name, '+5210000005678');
 });
 
+test('a nameless Telegram seen chat is added under its Telegram id, never as +tg:…', async (t) => {
+  const { postJson, stateDir } = await setupMemory(t);
+  writeFileSync(join(stateDir, 'seen-chats.json'), JSON.stringify([{ jid: 'tg:42', name: null, kind: 'private', lastAt: 5, count: 1 }]));
+  assert.equal((await postJson('/api/memory/chats/add', { jid: 'tg:42' })).status, 200);
+  assert.equal(JSON.parse(readFileSync(join(stateDir, 'memory-chats.json'), 'utf8')).at(-1).name, 'Telegram 42');
+});
+
 test('memory-only chats are not in the chat list and the send endpoint refuses them', async (t) => {
   const { getJson, postJson, calls } = await setupMemory(t);
   assert.deepEqual((await getJson('/api/chats')).body.chats.map((c) => c.jid), [BEA]);

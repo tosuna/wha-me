@@ -529,6 +529,14 @@ test('runReply for a 1:1 contact keeps its metadata and lines unchanged', async 
   assert.equal(meta.respondTo, undefined);
 });
 
+test('runReply: the contact metadata names the channel (whatsapp / telegram); the prompt does not assume WhatsApp', async () => {
+  const metaOf = (args) => JSON.parse(args[1].split('\n').find((l) => l.startsWith('Contact: ')).slice('Contact: '.length));
+  assert.equal(metaOf((await replyCall()).args).channel, 'whatsapp');
+  const tg = await replyCall(undefined, [], { ...contact, jid: 'tg:-100555', type: 'group', respondTo: [] });
+  assert.equal(metaOf(tg.args).channel, 'telegram');
+  assert.doesNotMatch(tg.args[1], /WhatsApp GROUP/);
+});
+
 test('runLearn: restricted, no MCP servers, read-only tools, secret files denied, no GH_TOKEN; resolves the result text', async () => {
   const { spawn, calls } = fakeSpawn(RESULT('SUMMARY:\nx\nDIFF:\n'));
   process.env.GH_TOKEN = 'LEAK_ME';
@@ -673,11 +681,11 @@ test('PIPELINE_SETTINGS: the sim sandbox plus bridge secrets, infisical, wha-me 
   assert.equal(sandbox.failIfUnavailable, true);
   // allowLocalBinding: supertest-style tests open a port on localhost; external network stays npm-only.
   assert.deepEqual(sandbox.network, { allowedDomains: ['registry.npmjs.org'], strictAllowlist: true, allowLocalBinding: true });
-  for (const p of [...SIM_JOB_SETTINGS.sandbox.filesystem.denyRead, '~/.infisical', `${W}/bridge/auth`, `${W}/bridge/state`, `${W}/bridge/contacts.json`]) {
+  for (const p of [...SIM_JOB_SETTINGS.sandbox.filesystem.denyRead, '~/.infisical', `${W}/bridge/auth`, `${W}/bridge/auth-tg`, `${W}/bridge/state`, `${W}/bridge/contacts.json`]) {
     assert.ok(sandbox.filesystem.denyRead.includes(p), p);
   }
   assert.ok(sandbox.filesystem.denyWrite.includes(W));
-  for (const r of [...SIM_JOB_SETTINGS.permissions.deny, 'Bash(security:*)', `Read(/${HOME}/.infisical/**)`, `Read(/${W}/bridge/auth/**)`,
+  for (const r of [...SIM_JOB_SETTINGS.permissions.deny, 'Bash(security:*)', `Read(/${HOME}/.infisical/**)`, `Read(/${W}/bridge/auth/**)`, `Read(/${W}/bridge/auth-tg/**)`,
     `Read(/${W}/bridge/state/**)`, `Read(/${W}/bridge/contacts.json)`, `Edit(/${W}/**)`, `Write(/${W}/**)`]) assert.ok(permissions.deny.includes(r), r);
 });
 

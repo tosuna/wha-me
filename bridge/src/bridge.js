@@ -1,6 +1,7 @@
 import { none as noActions, reviewHint } from './actions.js';
 import { createConsoleTrace } from './console-trace.js';
 import { isPersona, lookupContact, respondToOf } from './core/allowlist.js';
+import { CHANNEL_LABEL, channelOf } from './core/channel.js';
 import { noFeedback } from './feedback.js';
 import { noRequests } from './requests.js';
 import { noRunLog } from './run-log.js';
@@ -37,9 +38,12 @@ export function takeBatch(sorted, max) {
   return cut > 0 ? sorted.slice(0, cut) : sorted.filter((e) => e.at === edge);
 }
 
-const fmtHandoff = (contact, h) =>
+// WA / TG: every self-chat line about a chat says which channel it came from.
+const via = (jid) => CHANNEL_LABEL[channelOf(jid)];
+
+const fmtHandoff = (jid, contact, h) =>
   [
-    `HANDOFF · ${contact.name}`,
+    `HANDOFF · ${via(jid)} · ${contact.name}`,
     `type: ${h.type}`,
     `blocking: ${h.blocking}`,
     ...Object.entries(h.fields ?? {})
@@ -53,11 +57,12 @@ const fmtHandoffEvent = (h, bubbles, shadow) => `handoff ${h.type}: ${h.fields?.
 
 const fmtImplement = (i) => `IMPLEMENT: ${i.summary}\nspec:\n${i.spec}`;
 
-const fmtDraft = (tag, contact, { bubbles, handoff, implement }) =>
+// tag: 'sombra' | 'descartado' -> "[sombra · TG] → Carlos:".
+const fmtDraft = (tag, jid, contact, { bubbles, handoff, implement }) =>
   [
-    `${tag} → ${contact.name}:`,
+    `[${tag} · ${via(jid)}] → ${contact.name}:`,
     ...bubbles,
-    ...(handoff ? [fmtHandoff(contact, handoff)] : []),
+    ...(handoff ? [fmtHandoff(jid, contact, handoff)] : []),
     ...(implement ? [fmtImplement(implement)] : []),
   ].join('\n\n');
 
@@ -460,7 +465,7 @@ export function createBridge({
       const shadow = shadowFor(jid);
       const r = requests.fromHandoff(jid, contact, handoff, { shadow });
       if (r) {
-        await say(`${shadow ? '[sombra] ' : ''}PETICIÓN #${r.id} · ${contact.name}: ${r.summary}`);
+        await say(`${shadow ? '[sombra] ' : ''}PETICIÓN #${r.id} · ${via(jid)} · ${contact.name}: ${r.summary}`);
         remember(jid, `petición #${r.id} registrada: ${r.summary} (${r.status})`);
       }
     }
@@ -470,19 +475,19 @@ export function createBridge({
     }
 
     if (shadowFor(jid)) {
-      await say(fmtDraft('[sombra]', { ...contact, name: label }, out));
+      await say(fmtDraft('sombra', jid, { ...contact, name: label }, out));
       if (handoffEvent(handoff, bubbles)) remember(jid, fmtHandoffEvent(handoff, bubbles, true));
       if (implement && contact.canTriggerImplementation) remember(jid, `implementación pendiente: ${implement.summary}`);
       if (approve) {
         const refused = veto ?? actions.precheck(contact, approve);
-        await say(refused ? `[sombra] no aprobaría ${folioList(approve) ?? '(folio inválido)'}: ${refused}` : `[sombra] aprobaría ${folioList(approve)}`);
+        await say(refused ? `[sombra · ${via(jid)}] no aprobaría ${folioList(approve) ?? '(folio inválido)'}: ${refused}` : `[sombra · ${via(jid)}] aprobaría ${folioList(approve)}`);
       }
       return 'shadow';
     }
 
     // Re-check: the agent run takes minutes; the owner may have paused or written meanwhile, or hours may have closed.
     if (store.getState().paused || ownerActive(jid) || teamSpoke()) {
-      await say(fmtDraft('[descartado]', { ...contact, name: label }, out));
+      await say(fmtDraft('descartado', jid, { ...contact, name: label }, out));
       return 'discarded';
     }
     if (!inHours(jid)) {
@@ -511,14 +516,14 @@ export function createBridge({
       }
     }
     if (bubbles.length && !(await sendBubbles(jid, bubbles))) return 'blocked'; // secret guard: nothing sent
-    if (handoff) await say(fmtHandoff(contact, handoff));
+    if (handoff) await say(fmtHandoff(jid, contact, handoff));
     if (handoffEvent(handoff, bubbles)) remember(jid, fmtHandoffEvent(handoff, bubbles));
     if (implement) {
       if (contact.canTriggerImplementation) {
         enqueue({ jid, implement });
         remember(jid, `implementación pendiente: ${implement.summary}`);
       }
-      else await say(`HANDOFF · ${contact.name} (cannot trigger implementation)\n${fmtImplement(implement)}`);
+      else await say(`HANDOFF · ${via(jid)} · ${contact.name} (cannot trigger implementation)\n${fmtImplement(implement)}`);
     }
     return bubbles.length ? 'sent' : 'no_reply';
   }
@@ -666,7 +671,7 @@ export function createBridge({
     if (!bubbles?.length) return;
     const st = store.getState();
     // Held for the owner to send themselves; ownerActive = they are handling the chat right now.
-    if (shadowFor(jid) || st.paused || ownerActive(jid)) return say([`[no enviado] → ${contact.name}:`, ...bubbles].join('\n\n'));
+    if (shadowFor(jid) || st.paused || ownerActive(jid)) return say([`[no enviado · ${via(jid)}] → ${contact.name}:`, ...bubbles].join('\n\n'));
     if (!inHours(jid)) {
       clock.setTimer(() => deliver(jid, contact, bubbles).catch((e) => say(`ERROR deliver · ${contact.name}\n${e.message}`)), msUntilOpening());
       return;

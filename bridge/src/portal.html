@@ -814,8 +814,13 @@ function avatar(c, small) {
   return a;
 }
 
+const CHANNELS = { whatsapp: ['WA', 'WhatsApp'], telegram: ['TG', 'Telegram'] };
+
 function tags(c) {
-  const out = [];
+  const [short, long] = CHANNELS[c.channel] || CHANNELS.whatsapp;
+  const ch = el('span', 'tag', short);
+  ch.title = long;
+  const out = [ch];
   if (c.blocking) out.push(el('span', 'tag bad', 'Bloqueante'));
   else if (c.needsIntervention) out.push(el('span', 'tag warn', 'Te necesita'));
   if (c.tenant) out.push(el('span', 'tag', TENANTS[c.tenant] || c.tenant));
@@ -1196,7 +1201,7 @@ const MEM_FILTERS = [['open', 'Abiertos'], ['closed', 'Cerrados'], ['all', 'Todo
 const KINDS = { private: 'privado', group: 'grupo' };
 const personLabel = (k) => (k === '__OWNER_KEY__' ? 'Tú' : k === 'bridge' ? 'Bridge' : String(k).replace(/-/g, ' '));
 const whereLabel = (f) => (!f.chatName ? 'sin chat' : f.chatKind === 'group' ? 'grupo ' + f.chatName : 'privado con ' + f.chatName);
-const memNumber = (jid) => '+' + String(jid).split('@')[0];
+const memNumber = (jid) => (String(jid).startsWith('tg:') ? 'Telegram ' + String(jid).slice(3) : '+' + String(jid).split('@')[0]);
 
 async function memPost(path, body) {
   try {
