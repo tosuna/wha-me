@@ -117,6 +117,12 @@ An array of chats (see `bridge/contacts.example.json`):
 - `model` (optional): Claude model id passed as `--model` to this contact's reply runs (e.g. `claude-haiku-5-5`), with or
   without `persona`.
 - `effort` (optional): `low`, `medium`, `high`, `xhigh` or `max`, passed as `--effort` to this contact's reply runs.
+
+The same name merges entries only within one channel (a phone jid and a LID listed with the same name are one person).
+A WhatsApp and a Telegram contact are never merged by name: two people called Carlos stay two people in the topic
+memory. When they really are the same person, link their chats in the portal (Memoria → Enlazar contactos, saved to
+`bridge/state/contact-links.json` and read live); chats with alike names are only suggested, never linked for you.
+A link shares the memory under the WhatsApp contact's identity; unlinking splits what comes next, not what was stored.
 - `anyHour` (optional): `true` answers this contact at any time, ignoring `profile.hours`.
 - `live` (optional): `true` handles this contact as if shadow mode were off (replies are sent, normal delay,
   business hours apply unless `anyHour`) while every other contact stays in shadow.

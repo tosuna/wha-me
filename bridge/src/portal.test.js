@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { loginLink, portalToken, startPortal as start } from './portal.js';
 import { createFeedback } from './feedback.js';
 import { createRunLog } from './run-log.js';
@@ -675,6 +675,39 @@ test('memory chats: feeding + recent lists; Alimentar memoria moves a seen chat 
   assert.equal((await postJson('/api/memory/chats/remove', { jid: MO })).status, 200);
   assert.deepEqual(JSON.parse(readFileSync(join(stateDir, 'memory-chats.json'), 'utf8')).map((c) => c.jid), [NEW]);
   assert.equal((await postJson('/api/memory/chats/remove', { jid: MO })).status, 404);
+});
+
+test('Enlazar contactos: a WA and a TG Carlos are only a suggestion; link / unlink persist to contact-links.json; refusals are 400', async (t) => {
+  const { getJson, postJson, stateDir } = await setupMemory(t);
+  const CWA = '5218111111111@s.whatsapp.net';
+  writeFileSync(join(dirname(stateDir), 'contacts.json'), JSON.stringify([{ jid: BEA, name: 'Bea' }, { jid: CWA, name: 'Carlos' }, { jid: 'tg:123', name: 'Carlos' }, { jid: 'g@g.us', name: 'Obras', type: 'group' }]));
+  const file = join(stateDir, 'contact-links.json');
+  let v = (await getJson('/api/links')).body;
+  assert.deepEqual(v.links, []);
+  assert.deepEqual(v.suggestions.map((x) => [x.a.jid, x.a.label, x.b.jid, x.b.label]), [[CWA, 'WA', 'tg:123', 'TG']]);
+  assert.ok(v.chats.some((c) => c.jid === NEW && c.source === 'seen') && v.chats.some((c) => c.jid === MO && c.source === 'memory'));
+  assert.ok(!v.chats.some((c) => c.jid === 'g@g.us'), 'groups are not linkable');
+  for (const [body, re] of [[{ a: CWA, b: 'tg:999' }, /desconocido/], [{ a: CWA, b: CWA }, /consigo mismo/], [{ a: CWA, b: 'g@g.us' }, /grupo/], [{ a: CWA }, /desconocido/]]) {
+    const r = await postJson('/api/links/link', body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.match(JSON.parse(r.body).error, re);
+  }
+  assert.equal((await postJson('/api/links/link', { a: CWA, b: 'tg:123' }, { origin: null })).status, 403);
+  assert.equal((await postJson('/api/links/link', { a: CWA, b: 'tg:123' })).status, 200);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), [{ jids: [CWA, 'tg:123'] }]);
+  assert.equal((await postJson('/api/links/link', { a: NEW, b: 'tg:123' })).status, 400, 'tg:123 is already linked');
+  v = (await getJson('/api/links')).body;
+  assert.deepEqual([v.links.map((g) => g.members.map((m) => m.name)), v.suggestions], [[['Carlos', 'Carlos']], []]);
+  assert.equal((await postJson('/api/links/unlink', { jid: 'tg:123' })).status, 200);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), []);
+  assert.equal((await postJson('/api/links/unlink', { jid: 'tg:123' })).status, 404);
+});
+
+test('page has the Enlazar contactos section (suggestions to confirm, unlink warning), still textContent only', async (t) => {
+  const port = await setupWa(t, null);
+  const { body } = await get(port, '/');
+  for (const s of ['/api/links', '/api/links/link', '/api/links/unlink', 'mem-links', 'Enlazar contactos', 'Posible misma persona', 'Desenlazar', 'no se separan']) assert.ok(body.includes(s), s);
+  assert.doesNotMatch(body, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 });
 
 test('a seen chat without a name is added under its number', async (t) => {

@@ -2,13 +2,15 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { claudeRunner, createArchivist } from './archivist.js';
-import { canonicalChat } from './bridge.js';
+import { canonicalChat, knownPeopleOf, personKey } from './bridge.js';
+import { createContactLinks } from './contact-links.js';
 import { isPersona } from './core/allowlist.js';
+import { channelOf } from './core/channel.js';
 import { portalToken } from './portal.js';
 import { createRunLog, RUNS_DB } from './run-log.js';
 import { createSecretGuard } from './secrets.js';
 import { createSettings } from './settings.js';
-import { contactKey, createTopics, opaqueKey } from './topics.js';
+import { createTopics, opaqueKey } from './topics.js';
 
 // One-off seed of the topic memory from the owner's cleaned chat exports (private/conversaciones-limpias/*.txt); OWNER is the
 // profile tag:
@@ -51,13 +53,13 @@ export function parseExport(text, owner) {
   return { name: head.startsWith('#') ? headerName(head) : null, messages };
 }
 
-// `contacto_0001.txt` -> the contacts.json private chat whose number ends in 0001, under the bridge's canonical key;
+// `contacto_0001.txt` -> the contacts.json WhatsApp private chat whose number ends in 0001, under the bridge's canonical key;
 // no match -> `export:<file>` with the header name; a persona contact -> null (never fed to the memory).
-function chatFor(file, name, contacts) {
+function chatFor(file, name, contacts, links) {
   const suffix = basename(file, '.txt').match(/_(\d+)$/)?.[1];
-  const c = suffix && contacts.find((x) => x.type !== 'group' && String(x.jid).split('@')[0].endsWith(suffix));
+  const c = suffix && contacts.find((x) => x.type !== 'group' && channelOf(x.jid) === 'whatsapp' && String(x.jid).split('@')[0].endsWith(suffix));
   if (isPersona(c)) return null;
-  return c ? canonicalChat(c.jid, contacts) : { jid: `export:${file}`, name: name || basename(file, '.txt'), kind: 'private' };
+  return c ? canonicalChat(c.jid, contacts, [], links) : { jid: `export:${file}`, name: name || basename(file, '.txt'), kind: 'private' };
 }
 
 const readSeeded = (file) => {
@@ -66,9 +68,9 @@ const readSeeded = (file) => {
 
 // Prints one summary line per file; never message text (an archivist error can quote the model output: not printed,
 // it goes to the run log through its secret guard). A file is marked seeded only when all its batches succeed.
-export async function seedMemory({ profile, dir, contacts, archivist, runLog, stateFile, force = false, batch = BATCH, now = Date.now, log = console.log }) {
-  const knownPeople = [...new Set([...contacts.filter((c) => c.type !== 'group').map((c) => c.name), ...contacts.flatMap((c) => (c.respondTo ?? []).map((m) => m.name))])]
-    .map((name) => ({ name, key: contactKey(name) }));
+// links: state/contact-links.json groups (contact-links.js), so a linked person is seeded under the bridge's same key.
+export async function seedMemory({ profile, dir, contacts, links = [], archivist, runLog, stateFile, force = false, batch = BATCH, now = Date.now, log = console.log }) {
+  const knownPeople = knownPeopleOf(contacts, [], links);
   const since = now() - WINDOW_DAYS * DAY;
   const ownerKey = profile.tag.toLowerCase();
   let total = 0;
@@ -76,10 +78,10 @@ export async function seedMemory({ profile, dir, contacts, archivist, runLog, st
     const seeded = readSeeded(stateFile);
     if (seeded.includes(file) && !force) { log(`${file}: ya sembrado, se salta (usa --force para repetir)`); continue; }
     const { name, messages } = parseExport(readFileSync(join(dir, file), 'utf8'), profile.tag);
-    const chat = chatFor(file, name, contacts);
+    const chat = chatFor(file, name, contacts, links);
     if (!chat) { log(`${file}: chat con persona, no alimenta la memoria`); continue; }
     // An export not mapped to contacts.json is nobody we know: its contact gets an opaque key, never its header name.
-    const contact = chat.jid.startsWith('export:') ? opaqueKey(chat.jid) : contactKey(chat.name);
+    const contact = chat.jid.startsWith('export:') ? opaqueKey(chat.jid) : personKey(chat.jid, contacts, links);
     const entries = messages.filter((m) => m.at >= since)
       .map((m) => ({ author: m.author, name: m.author === profile.tag ? ownerKey : chat.name, person: m.author === profile.tag ? ownerKey : contact, text: m.text, at: m.at }));
     let applied = 0;
@@ -122,7 +124,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const runLog = createRunLog({ file: join(stateDir, RUNS_DB), leaks });
   await seedMemory({
     profile, dir: args.find((a) => !a.startsWith('--')) ?? join(BRIDGE, '..', 'private', 'conversaciones-limpias'),
-    contacts: JSON.parse(readFileSync(join(BRIDGE, 'contacts.json'), 'utf8')),
+    contacts: JSON.parse(readFileSync(join(BRIDGE, 'contacts.json'), 'utf8')), links: createContactLinks({ file: join(stateDir, 'contact-links.json') }).list(),
     archivist: createArchivist({ profile, topics, run: claudeRunner(), leaks }),
     runLog, stateFile: join(stateDir, 'seeded-exports.json'), force: args.includes('--force'),
   });

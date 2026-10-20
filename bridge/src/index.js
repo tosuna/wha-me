@@ -15,6 +15,7 @@ import { createBridge } from './bridge.js';
 import { createClashCheck } from './clash.js';
 import { loadConfig, validateContacts } from './config.js';
 import { createConsoleTrace } from './console-trace.js';
+import { createContactLinks } from './contact-links.js';
 import { createFeedback } from './feedback.js';
 import { checkHealth } from './health.js';
 import { createLearner } from './learn.js';
@@ -82,6 +83,8 @@ const topics = createTopics({ profile, file: join(stateDir, 'topics.db') });
 const memoryChats = createMemoryChats({ file: join(stateDir, 'memory-chats.json') });
 // Chats in neither list (no text), offered in the portal's Memoria view.
 const seenChats = createSeenChats({ file: join(stateDir, 'seen-chats.json') });
+// Explicit cross-channel identity (WhatsApp <-> Telegram), edited in the portal and read live: names never link people.
+const contactLinks = createContactLinks({ file: join(stateDir, 'contact-links.json') });
 
 // The portal starts first so it can show the QR while WhatsApp is not linked yet.
 const port = Number(process.env.PORTAL_PORT ?? 4747);
@@ -102,7 +105,7 @@ const askContact = (jid, note) => {
   return bridge.askContact(jid, note);
 };
 const portal = await startPortal({ profile, knowledge, pipeline: pipelineConfig, stateDir, requestsDir: workspace.requestsDir, contactsFile: join(BRIDGE, 'contacts.json'), port, sendMessage, sendSticker, selfJid: () => (bridge ? wa.selfJid : null), requests, askContact, settings, leaks,
-  onRequestAction: (id, action) => pipeline?.onAction(id, action), topics, memoryChats, seenChats })
+  onRequestAction: (id, action) => pipeline?.onAction(id, action), topics, memoryChats, seenChats, contactLinks })
   .catch((e) => console.error(`portal did not start (${e.message}); the QR is still printed here.`));
 const url = `http://127.0.0.1:${portal?.address().port ?? port}`;
 if (portal) console.log(`portal en ${url}`);
@@ -165,7 +168,7 @@ const clock = {
 
 bridge = createBridge({
   profile, workspace, wa, store, agent, clock, contacts, selfJid: wa.selfJid, core,
-  health: () => checkHealth(knowledge.healthUrls), leaks, topics, archivist: createArchivist({ profile, topics, run: claudeRunner(), leaks }), memoryChats, seenChats, trace: createConsoleTrace({ root: workspace.root, skill: skillDir(profile) }),
+  health: () => checkHealth(knowledge.healthUrls), leaks, topics, archivist: createArchivist({ profile, topics, run: claudeRunner(), leaks }), memoryChats, contactLinks, seenChats, trace: createConsoleTrace({ root: workspace.root, skill: skillDir(profile) }),
   notify: notifier.alert, runLog, actions,
   feedback, learner: createLearner({ profile, feedback, agent, healthUrls: knowledge.healthUrls, tenants: knowledge.tenants, repoDir: dirname(BRIDGE), proposalsDir: join(stateDir, 'proposals'), leaks }),
   portalLink: () => loginLink(stateDir), requests, stageLock,
