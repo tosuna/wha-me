@@ -101,6 +101,26 @@ test('seed: 30-day window, phone-suffix mapping to the canonical chat key, batch
     [['archive', 'real', 'ok', 0.01], ['archive', 'real', 'ok', 0.01], ['archive', 'real', 'ok', 0.01]]);
 });
 
+test('seed: exports are WhatsApp: a Telegram contact never matches the phone suffix, and an equal name stays apart', async () => {
+  const f = fixture();
+  const tito = { jid: 'tg:5550001', name: 'Ciro', register: 'tu' }; // ends in 0001 too, same name
+  await f.seed({ contacts: [tito, ...CONTACTS] });
+  const ciro = f.calls.filter((c) => c.chat.jid === '777@lid');
+  assert.equal(ciro.length, 2);
+  assert.equal(ciro[0].entries[0].person, 'ciro');
+  assert.deepEqual(ciro[0].knownPeople, [{ name: 'Ciro', key: 'tg:ciro' }, { name: 'Ciro', key: 'ciro' }, { name: 'Mara', key: 'mara' }]);
+  assert.ok(!f.calls.some((c) => c.chat.jid === tito.jid));
+});
+
+test('seed: a contact linked to a Telegram chat keeps its WhatsApp key (links read from the links list)', async () => {
+  const f = fixture();
+  const tg = { jid: 'tg:9', name: 'Ciro TG', register: 'tu' };
+  await f.seed({ contacts: [...CONTACTS, tg], links: [{ jids: ['tg:9', DAR_PN] }] });
+  const ciro = f.calls.filter((c) => c.chat.jid === '777@lid');
+  assert.equal(ciro[0].entries[0].person, 'ciro');
+  assert.ok(ciro[0].knownPeople.some((p) => p.name === 'Ciro TG' && p.key === 'ciro'));
+});
+
 test('seed: an export mapped to a persona contact is skipped (persona chats never feed the memory)', async () => {
   const f = fixture();
   await f.seed({ contacts: CONTACTS.map((c) => (c.jid === DAR_PN ? { ...c, persona: '/abs/p.md' } : c)) });

@@ -141,11 +141,15 @@ export function createTopics({ profile, file, now = Date.now }) {
       const e = /^\d+$/.test(String(op?.msg)) ? entries[Number(op.msg)] : null;
       return e && typeof e.person === 'string' && e.person ? e : null;
     };
-    // add_participant target: a person of the batch by key, or a known person by key or name (first match wins).
+    // add_participant target: a person of the batch by key, or a known person by key or by name. A name that fits more than
+    // one person (two unlinked "Carlos" on different channels) is nobody: guessing would join the wrong person's memory.
     const personFor = (p) => {
       const s = String(p ?? '');
       if (batch.has(s)) return s;
-      return (knownPeople.find((k) => k.key === s) ?? knownPeople.find((k) => contactKey(k.name) === contactKey(s)))?.key ?? null;
+      const byKey = knownPeople.find((k) => k.key === s);
+      if (byKey) return byKey.key;
+      const byName = new Set(knownPeople.filter((k) => contactKey(k.name) === contactKey(s)).map((k) => k.key));
+      return byName.size === 1 ? [...byName][0] : null;
     };
     const one = (op, touched) => {
       const known = ['new_topic', 'add_fact', 'add_participant', 'close_topic', 'reopen_topic'].includes(op?.op);
@@ -201,8 +205,9 @@ export function createTopics({ profile, file, now = Date.now }) {
   // Topics for a reply run: FTS hits where `person` participates, then their other recent open topics. Only mentionable
   // facts are returned (the owner's discretion rule): said in this same chat; or, in a private chat, `person` participates and
   // so does the fact's author (or it is the owner/the bridge). The rest never reaches the reply model; topics left empty drop.
+  // person: a person key (bridge.js personKey), never a display name: an equal name on another channel is someone else.
   function recall({ person, chat, text, now: t = now(), maxTopics = 6, maxFacts = 8 }) {
-    const me = contactKey(person ?? '');
+    const me = person ?? '';
     const q = ftsQuery(text);
     const hits = search(q, maxTopics * 3);
     const mine = db.prepare(`SELECT t.id FROM topics t JOIN participants p ON p.topic_id = t.id

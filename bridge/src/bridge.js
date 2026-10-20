@@ -1,5 +1,6 @@
 import { none as noActions, reviewHint } from './actions.js';
 import { createConsoleTrace } from './console-trace.js';
+import { linkGroupOf } from './contact-links.js';
 import { isPersona, lookupContact, respondToOf } from './core/allowlist.js';
 import { CHANNEL_LABEL, channelOf } from './core/channel.js';
 import { noFeedback } from './feedback.js';
@@ -17,16 +18,44 @@ const CATCH_UP_MS = 30 * 24 * 60 * 60 * 1000;
 export const ARCHIVE_BATCH = 60;
 const SHADOW_EVENT = '(sombra: borrador no enviado) ';
 
-// One memory key per chat: a group's jid; for a contacts.json person listed under several jids (phone + LID, same name), the
-// first one. A memory-only chat keeps its own jid: its name is a display name, never merged with anyone by it.
-// contacts.json wins over memory-chats.json. Also used by seed-memory.js. -> { jid, name, kind } | null
-export function canonicalChat(jid, contacts, memory = []) {
-  const contact = lookupContact(contacts, jid);
-  const c = contact ?? lookupContact(memory, jid);
+// A name identifies a contacts.json person only within its channel: WhatsApp keys stay the bare contactKey (the memory
+// predates Telegram), Telegram ones are prefixed, so a WhatsApp and a Telegram "Carlos" never meet by name.
+const nameKey = (jid, name) => (channelOf(jid) === 'telegram' ? `tg:${contactKey(name)}` : contactKey(name));
+const opaqueOf = (jid) => opaqueKey(jid, channelOf(jid) === 'telegram' ? 'tg' : 'wa');
+const isPerson = (contacts, jid) => !!lookupContact(contacts, jid) && lookupContact(contacts, jid).type !== 'group';
+
+// Person key of a private jid: a contacts.json person by name within its channel, anyone else opaque (by jid). A linked jid
+// (contact-links.js) takes its group's key: the WhatsApp contacts.json member's (keeps its memory), else the first member's.
+export function personKey(jid, contacts, links = []) {
+  const own = (j) => (isPerson(contacts, j) ? nameKey(j, lookupContact(contacts, j).name) : opaqueOf(j));
+  const g = linkGroupOf(links, jid);
+  return own(g ? g.jids.find((j) => channelOf(j) === 'whatsapp' && isPerson(contacts, j)) ?? g.jids[0] : jid);
+}
+
+// One memory key per chat: a group's jid; for a private chat, the first contacts.json (then memory-only) jid of the same
+// person (personKey: phone + LID with the same name, or an explicit link), a WhatsApp one first. A memory-only chat is never
+// merged by its name, only by a link. contacts.json wins over memory-chats.json. Also used by seed-memory.js.
+// -> { jid, name, kind } | null
+export function canonicalChat(jid, contacts, memory = [], links = []) {
+  const c = lookupContact(contacts, jid) ?? lookupContact(memory, jid);
   if (!c) return null;
-  const kind = c.type === 'group' || c.kind === 'group' ? 'group' : 'private';
-  const key = kind === 'group' || !contact ? c.jid : contacts.find((p) => p.type !== 'group' && contactKey(p.name) === contactKey(c.name)).jid;
-  return { jid: key, name: c.name, kind };
+  if (c.type === 'group' || c.kind === 'group') return { jid: c.jid, name: c.name, kind: 'group' };
+  const key = personKey(c.jid, contacts, links);
+  const same = [...contacts, ...memory].filter((p) => p.type !== 'group' && p.kind !== 'group' && personKey(p.jid, contacts, links) === key);
+  return { jid: (same.find((p) => channelOf(p.jid) === 'whatsapp') ?? same[0]).jid, name: c.name, kind: 'private' };
+}
+
+// [{ name, key }] the archivist may add as participants: contacts.json people and respondTo members, then memory-only private
+// chats. An equal name on the same channel keeps the first (contacts.json over memory-only); across channels both stay, so
+// a name two unlinked people share resolves to nobody (topics.js). Also used by seed-memory.js.
+export function knownPeopleOf(contacts, memory = [], links = []) {
+  const seen = new Set();
+  return [
+    ...contacts.filter((c) => c.type !== 'group').map((p) => ({ jid: p.jid, name: p.name, key: personKey(p.jid, contacts, links) })),
+    ...contacts.flatMap((g) => (g.respondTo ?? []).map((m) => ({ jid: m.jids?.[0] ?? g.jid, name: m.name }))).map((m) => ({ ...m, key: nameKey(m.jid, m.name) })),
+    ...memory.filter((m) => m.kind === 'private' && !lookupContact(contacts, m.jid)).map((m) => ({ jid: m.jid, name: m.name, key: personKey(m.jid, contacts, links) })),
+  ].filter((p) => !seen.has(`${channelOf(p.jid)}:${contactKey(p.name)}`) && seen.add(`${channelOf(p.jid)}:${contactKey(p.name)}`))
+    .map(({ name, key }) => ({ name, key }));
 }
 
 // First batch of a time-sorted backlog, cut at a timestamp boundary: the next run reads only at > cursor, so a tie split
@@ -101,7 +130,7 @@ const SECRET_ALERT = 'ALERT · outbound message blocked: it matched a secret pat
 // profile: the owner (config profile): tag is the persisted author of the owner's messages, tag.toLowerCase() their person key.
 // workspace: config workspace (its root is trimmed from /simular trace paths).
 export function createBridge({
-  profile, workspace, wa, store, agent, clock, contacts, selfJid, core, health, leaks, topics, archivist, memoryChats = { list: () => [] }, seenChats = { record() {} }, trace = createConsoleTrace({ log: () => {} }), notify = () => {}, runLog = noRunLog,
+  profile, workspace, wa, store, agent, clock, contacts, selfJid, core, health, leaks, topics, archivist, memoryChats = { list: () => [] }, contactLinks = { list: () => [] }, seenChats = { record() {} }, trace = createConsoleTrace({ log: () => {} }), notify = () => {}, runLog = noRunLog,
   actions = noActions(), feedback = noFeedback,
   learner = { handle: async () => 'aprendizaje no configurado' }, portalLink = () => null, requests = noRequests, stageLock = (fn) => fn(), log = console.log,
 }) {
@@ -141,14 +170,20 @@ export function createBridge({
   const memoryChatOf = (jid) => (contactOf(jid) ? null : core.lookupContact(memoryChats.list(), jid)); // contacts.json wins
   const people = contacts.filter((c) => c.type !== 'group');
   // Persona chats never feed the topic memory (archive, events, catch-up) nor the learning pairs.
-  const chatOf = (jid) => (isPersona(contactOf(jid)) ? null : canonicalChat(jid, contacts, memoryChats.list()));
+  const chatOf = (jid) => (isPersona(contactOf(jid)) ? null : canonicalChat(jid, contacts, memoryChats.list(), contactLinks.list()));
   const feedbackOf = (jid) => (isPersona(contactOf(jid)) ? noFeedback : feedback);
   // contacts.json `anyHour: true`: that chat ignores profile.hours.
   const inHours = (jid) => !!contactOf(jid)?.anyHour || core.isWithinHours(clock.now(), profile);
   // contacts.json `live: true`: that chat runs as if shadow were off (trial one chat live while the rest stays in shadow).
   const shadowFor = (jid) => !!store.getState().shadow && !contactOf(jid)?.live;
-  const jidsOf = (chat) => (chat.kind === 'group' || !contactOf(chat.jid) ? [chat.jid]
-    : people.filter((p) => contactKey(p.name) === contactKey(chat.name)).map((p) => p.jid));
+  // Every jid of the chat's person (contacts.json, memory-only, linked): its history is archived as one chat.
+  const jidsOf = (chat) => {
+    if (chat.kind === 'group') return [chat.jid];
+    const links = contactLinks.list();
+    const key = personKey(chat.jid, contacts, links);
+    const jids = [...people, ...memoryChats.list().filter((m) => m.kind === 'private')].map((p) => p.jid).concat(links.flatMap((g) => g.jids));
+    return [...new Set(jids.filter((j) => personKey(j, contacts, links) === key))];
+  };
   const alertIncident = (job, contact, reason) => notify({
     title: 'wha-me: bridge bloqueado',
     message: `${reason} · ${contact?.name ?? job.jid}: ${job.implement.summary}`,
@@ -164,9 +199,12 @@ export function createBridge({
   const queued = new Set();
   let archiving = Promise.resolve(); // one archive run at a time, globally
 
-  function recallTopics(jid, person, text) {
+  // Recall is by person key (name: the asking group member's, else unused): an equal name on another channel is someone else.
+  function recallTopics(jid, name, text) {
     try {
-      return topics.recall({ person, chat: chatOf(jid), text, now: clock.now().getTime() });
+      const chat = chatOf(jid);
+      const person = chat?.kind === 'private' ? personKey(jid, contacts, contactLinks.list()) : nameKey(jid, name ?? '');
+      return topics.recall({ person, chat, text, now: clock.now().getTime() });
     } catch (e) {
       console.error('topics recall failed:', e.message);
       return [];
@@ -204,26 +242,20 @@ export function createBridge({
     return archiving;
   }
 
-  // [{ name, key }] the archivist may add as participants: contacts.json (and respondTo) names first, so they win over an
-  // equal memory-only name, which is dropped.
-  const knownPeople = () => {
-    const seen = new Set();
-    return [
-      ...[...people, ...contacts.flatMap((c) => c.respondTo ?? [])].map((p) => ({ name: p.name, key: contactKey(p.name) })),
-      ...memoryChats.list().filter((m) => m.kind === 'private' && !contactOf(m.jid)).map((m) => ({ name: m.name, key: opaqueKey(m.jid) })),
-    ].filter((p) => !seen.has(contactKey(p.name)) && seen.add(contactKey(p.name)));
-  };
+  const knownPeople = () => knownPeopleOf(contacts, memoryChats.list(), contactLinks.list());
 
-  // Archive identity of a history entry, from jids only (names are labels): the owner; the bridge's own bubbles; a contacts.json
-  // private chat or respondTo member; a group sender whose jid is a contact or any group's respondTo member; else opaque.
-  const memberOf = (jid) => core.lookupContact(people, jid) ?? contacts.map((g) => respondToOf(g, [jid])).find(Boolean);
+  // Archive identity of a history entry, from jids only (names are labels): the owner; the bridge's own bubbles; a private
+  // chat's person (personKey); a respondTo member; a group sender whose jid is a contact, linked, or any group's respondTo
+  // member; else opaque. Names count only within the sender's channel.
   function personOf(chat, e) {
     if (e.author === OWNER) return e.bot ? 'bridge' : ownerKey;
-    if (chat.kind === 'private') return contactOf(chat.jid) ? contactKey(chat.name) : opaqueKey(chat.jid);
-    if (e.respondTo) return contactKey(e.author);
+    const links = contactLinks.list();
+    if (chat.kind === 'private') return personKey(chat.jid, contacts, links);
+    if (e.respondTo) return nameKey(e.by ?? chat.jid, e.author);
     if (!e.by) return opaqueKey(e.author, 'anon'); // legacy entry: only a display name
-    const m = memberOf(e.by);
-    return m ? contactKey(m.name) : opaqueKey(e.by);
+    if (core.lookupContact(people, e.by) || linkGroupOf(links, e.by)) return personKey(e.by, contacts, links);
+    const m = contacts.map((g) => respondToOf(g, [e.by])).find(Boolean);
+    return m ? nameKey(e.by, m.name) : opaqueOf(e.by);
   }
 
   // The chat's full history after its cursor (all its jids) + pending events -> archivist. The cursor only moves on success.

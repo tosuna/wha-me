@@ -1,5 +1,7 @@
+import { linkGroupOf } from './contact-links.js';
 import { lookupContact } from './core/allowlist.js';
-import { channelOf } from './core/channel.js';
+import { CHANNEL_LABEL, channelOf } from './core/channel.js';
+import { contactKey } from './topics.js';
 
 // One JSON object per line; a torn or hand-edited line is skipped, never fatal.
 export function parseHistory(text) {
@@ -180,4 +182,38 @@ export function costTotals(rows, now, tz) {
     return { costUsd, runs, byContact: [...by.values()].sort((a, b) => b.costUsd - a.costUsd) };
   };
   return { today: total((d) => d === today), month: total((d) => d.slice(0, 7) === today.slice(0, 7)) };
+}
+
+// Every chat the owner can see for Enlazar contactos (contacts.json, memory-only, seen; the first listing of a jid wins),
+// groups included so a link to one is refused by kind. -> [{ jid, name, kind, source, channel, label }]
+export function knownChats({ contacts, memory, seen }) {
+  const all = [
+    ...contacts.map((c) => ({ jid: c.jid, name: c.name, kind: c.type === 'group' ? 'group' : 'private', source: 'contacts' })),
+    ...memory.map((c) => ({ jid: c.jid, name: c.name, kind: c.kind, source: 'memory' })),
+    ...seen.map((c) => ({ jid: c.jid, name: c.name ?? null, kind: c.kind, source: 'seen' })),
+  ].filter((c, i, a) => !lookupContact(a.slice(0, i), c.jid));
+  return all.map((c) => ({ ...c, channel: channelOf(c.jid), label: CHANNEL_LABEL[channelOf(c.jid)] }));
+}
+
+// Same or prefix name once normalized ("Carlos" ~ "Carlos Pérez"): a hint, never identity.
+const alike = (a, b) => {
+  const [x, y] = [contactKey(a ?? ''), contactKey(b ?? '')];
+  return !!x && !!y && (x === y || x.startsWith(`${y}-`) || y.startsWith(`${x}-`));
+};
+
+// The private chats, the current links (members resolved to chats), and WhatsApp<->Telegram pairs with alike names, neither
+// linked yet: only SUGGESTED, the owner confirms each one. A contacts.json person listed under several WhatsApp jids (phone +
+// LID, same name) is suggested once.
+export function linkView({ contacts, memory, seen, links }) {
+  const all = knownChats({ contacts, memory, seen });
+  const chats = all.filter((c) => c.kind === 'private');
+  const member = (jid) => lookupContact(all, jid) ?? { jid, name: null, channel: channelOf(jid), label: CHANNEL_LABEL[channelOf(jid)] };
+  const free = chats.filter((c) => !linkGroupOf(links, c.jid));
+  const seenPairs = new Set();
+  const suggestions = free.filter((a) => a.channel === 'whatsapp').flatMap((a) => free.filter((b) => b.channel === 'telegram' && alike(a.name, b.name)).map((b) => ({ a, b })))
+    .filter(({ a, b }) => {
+      const k = `${a.source === 'contacts' ? contactKey(a.name) : a.jid}|${b.jid}`;
+      return !seenPairs.has(k) && seenPairs.add(k);
+    });
+  return { chats, links: links.map((g) => ({ jids: g.jids, members: g.jids.map(member) })), suggestions };
 }

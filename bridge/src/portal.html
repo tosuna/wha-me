@@ -288,6 +288,7 @@
   .mem-row:first-of-type { border-top: 0; }
   .mem-row .grow { flex: 1; min-width: 12ch; }
   .mem-row .muted { color: var(--muted); font-size: .875rem; }
+  .mem-row select { min-height: 44px; flex: 1; min-width: 14ch; padding: 0 var(--s2); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); color: inherit; }
   .mem-topic { border-top: 1px solid var(--line); }
   .mem-topic summary { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; min-height: 44px; cursor: pointer; }
   .mem-topic .facts-list { margin: 0 0 var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
@@ -1273,11 +1274,62 @@ function chatRow(c, sub, button) {
   return row;
 }
 
+// --- Enlazar contactos: one person on WhatsApp and Telegram, linked by hand (GET/POST /api/links...). A name never links
+// anyone: an alike name is only a suggestion the owner confirms.
+const SOURCES = { contacts: 'contacto', memory: 'solo memoria', seen: 'reciente' };
+const linkId = (c) => (c.channel === 'telegram' ? c.jid : memNumber(c.jid));
+const linkName = (c) => c.name || linkId(c);
+
+function linkWho(c) {
+  const who = el('span');
+  who.append(el('span', 'tag', c.label), ' ', el('strong', null, linkName(c)));
+  return who;
+}
+
+function linkPair(a, b, sub, button) {
+  const row = el('div', 'mem-row');
+  const who = el('div', 'grow');
+  who.append(linkWho(a), ' ↔ ', linkWho(b), ...(sub ? [el('div', 'muted', sub)] : []));
+  row.append(who, button);
+  return row;
+}
+
+function linkPick(chats, label) {
+  const s = el('select');
+  s.setAttribute('aria-label', label);
+  s.append(new Option(label + '…', ''), ...chats.map((c) => new Option('[' + c.label + '] ' + linkName(c) + ' · ' + linkId(c) + ' · ' + (SOURCES[c.source] || c.source), c.jid)));
+  return s;
+}
+
+function linkSection(v) {
+  const link = (a, b) => memPost('/api/links/link', { a, b });
+  const links = v.links.map((g) => linkPair(g.members[0], g.members[1], null, memButton('Desenlazar', () => {
+    if (confirm('¿Desenlazar ' + g.members.map(linkName).join(' y ') + '?\n\nLo que digan de aquí en adelante se guarda por separado, pero los recuerdos ya guardados bajo la persona compartida no se separan.')) memPost('/api/links/unlink', { jid: g.jids[0] });
+  }, 'quiet')));
+  const suggestions = v.suggestions.map(({ a, b }) => linkPair(a, b, 'Posible misma persona: confírmalo antes de enlazar.', memButton('Enlazar', () => {
+    if (confirm('¿' + linkName(a) + ' (' + a.label + ') y ' + linkName(b) + ' (' + b.label + ') son la misma persona?\n\nSi los enlazas, el agente comparte entre ambos chats lo que recuerda de esa persona.')) link(a.jid, b.jid);
+  })));
+  const free = v.chats.filter((c) => !v.links.some((g) => g.jids.includes(c.jid)));
+  const pickA = linkPick(free, 'Primer contacto');
+  const pickB = linkPick(free, 'Segundo contacto');
+  const manual = el('div', 'mem-row');
+  manual.append(pickA, pickB, memButton('Enlazar', () => {
+    if (!pickA.value || !pickB.value) return alert('Elige los dos contactos que son la misma persona.');
+    if (confirm('¿Son la misma persona? El agente compartirá entre ambos chats lo que recuerda de ella.')) link(pickA.value, pickB.value);
+  }));
+  return section('Enlazar contactos',
+    el('p', null, 'Si alguien te escribe por WhatsApp y por Telegram, enlaza sus chats para que el agente lo trate como una sola persona. Un nombre igual nunca basta: dos personas que se llaman igual siguen separadas hasta que tú las enlazas.'),
+    ...(links.length ? links : [el('p', 'muted', 'Sin contactos enlazados.')]),
+    ...(suggestions.length ? [el('h4', null, 'Sugerencias'), ...suggestions] : []),
+    el('h4', null, 'Enlazar a mano'), manual);
+}
+
 async function loadMemory(jump, token) {
   if (!jump && !memStale) return;
-  const [topics, chats] = await Promise.all([
+  const [topics, chats, links] = await Promise.all([
     fetch('/api/memory/topics' + (memFilter === 'all' ? '' : '?status=' + memFilter)).then((r) => r.json()),
     fetch('/api/memory/chats').then((r) => r.json()),
+    fetch('/api/links').then((r) => r.json()),
   ]);
   if (token !== loadToken || view !== 'memory') return;
   memStale = false;
@@ -1313,7 +1365,9 @@ async function loadMemory(jump, token) {
     el('p', null, 'Chats que te escribieron y que el agente ignora. Al agregarlos solo se guardan los mensajes nuevos: WhatsApp no entrega los anteriores.'),
     ...(recent.length ? recent : [el('p', 'muted', 'Sin chats recientes.')]));
   secRecent.id = 'mem-recent';
-  fill([secTopics, secFeeding, secRecent], jump, false);
+  const secLinks = linkSection(links);
+  secLinks.id = 'mem-links';
+  fill([secTopics, secFeeding, secRecent, secLinks], jump, false);
 }
 
 // The latest call wins; a superseded jump (user click) is carried over to it.
