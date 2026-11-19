@@ -57,6 +57,23 @@ export function checkPatch(diff, allowed) {
   return { files, error: files.length ? null : 'la propuesta no trae cambios' };
 }
 
+// A model may omit the `diff --git` line before a file's `---`/`+++` header; with --recount git then reads the next file's
+// header as part of the previous hunk ("patch does not apply"). Adds the missing lines: framing only, the content is unchanged.
+export function withGitHeaders(diff) {
+  const lines = String(diff).split('\n');
+  const path = (l) => l.slice(4).replace(/\t.*$/, '').trim();
+  let framed = false;
+  return lines.flatMap((l, i) => {
+    if (l.startsWith('diff --git ')) framed = true;
+    else if (l.startsWith('--- ') && lines[i + 1]?.startsWith('+++ ')) {
+      const header = framed ? [] : [`diff --git ${path(l)} ${path(lines[i + 1])}`];
+      framed = false;
+      return [...header, l];
+    }
+    return [l];
+  }).join('\n');
+}
+
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 // The diff's + / - content lines, exactly what /aprender si would apply. File headers are dropped with the same rule as
 // checkPatch (`--- ` only when the next line is `+++ `), so no content line can hide as a header.
@@ -206,20 +223,22 @@ export function createLearner({
     const { files, error } = checkPatch(text, SKILL_FILES);
     if (error) return `rechazada: ${error}. Nada aplicado; /aprender no para descartarla`;
     const paths = files.map((f) => relative(SKILL, f.path));
+    const patchFile = file.replace(/\.diff$/, '.git.diff');
+    writeFileSync(patchFile, withGitHeaders(text));
     try {
       const branch = await skillGit('rev-parse', '--abbrev-ref', 'HEAD');
       if (branch !== 'main') return `no apliqué: el repo está en ${branch}, no en main`;
       const dirty = await skillGit('status', '--porcelain', '--', ...paths);
       if (dirty) return `no apliqué: hay cambios sin commit en la skill:\n${dirty}`;
-      await git('apply', '--check', '--recount', file);
+      await git('apply', '--check', '--recount', patchFile);
     } catch (e) {
       return `no apliqué la propuesta: ${e.message}`;
     }
-    const verdict = await gate(file, say);
+    const verdict = await gate(patchFile, say);
     if (!verdict.ok) return verdict.text;
     if (sha256(readFileSync(file, 'utf8')) !== p.sha256) return 'rechazada: el diff cambió durante la evaluación. Nada aplicado; manda /aprender no y /aprender otra vez';
     try {
-      await git('apply', '--recount', file);
+      await git('apply', '--recount', patchFile);
       await skillGit('commit', '-m', `feat(skill): learn from shadow feedback (${p.pairIds.length} pairs)`, '--', ...paths);
     } catch (e) {
       return `no apliqué la propuesta: ${e.message}`;

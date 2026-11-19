@@ -283,7 +283,8 @@ test('/aprender si: a diff changed while the eval ran is refused (hash re-checke
   assert.ok(!s.gitCalls.some((c) => (c[0] === 'apply' && c[1] !== '--check') || c[0] === 'commit'));
 });
 
-test('/aprender si commits and pushes in the repo that owns the skill, even a nested one the outer repo ignores (real git)', async () => {
+// A real outer repo with the skill in its own nested repo (private/, ignored by the outer one) pushing to a bare remote.
+function realGit(output) {
   const dir = mkdtempSync(join(tmpdir(), 'wa-learn-nested-'));
   const sh = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' }).toString().trim();
   const id = ['-c', 'user.name=t', '-c', 'user.email=t@t'];
@@ -305,22 +306,38 @@ test('/aprender si commits and pushes in the repo that owns the skill, even a ne
   sh(inner, ...id, 'commit', '-qm', 'skill');
   sh(inner, 'remote', 'add', 'origin', remote);
   sh(inner, 'push', '-q', 'origin', 'main');
-  const voice = 'private/skills/owner/references/voice.md';
-  const pairs = PAIRS;
   const reviewed = [];
-  const feedback = { list: ({ unreviewed }) => (unreviewed ? pairs.filter((p) => !reviewed.includes(p.id)) : pairs), markReviewed: (ids) => reviewed.push(...ids) };
-  const agent = { runLearn: async () => `SUMMARY:\nx\n${EVIDENCE}DIFF:\n${patch(voice)}` };
+  const feedback = { list: ({ unreviewed }) => (unreviewed ? PAIRS.filter((p) => !reviewed.includes(p.id)) : PAIRS), markReviewed: (ids) => reviewed.push(...ids) };
+  const agent = { runLearn: async () => output };
   const evaluator = { run: async () => ({ ok: true, text: 'evaluación ok' }) };
   process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = 't';
   process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = 't@t';
   const learner = createLearner({ profile: { ...PROFILE, skill }, feedback, agent, repoDir: outer, proposalsDir: join(dir, 'proposals'), evaluator, leaks: () => false });
   const say = async () => {};
-  await learner.handle('', say);
-  const reply = await learner.handle('si', say);
+  return { handle: (arg) => learner.handle(arg, say), sh, outer, inner, remote, reviewed };
+}
+
+test('/aprender si commits and pushes in the repo that owns the skill, even a nested one the outer repo ignores (real git)', async () => {
+  const voice = 'private/skills/owner/references/voice.md';
+  const g = realGit(`SUMMARY:\nx\n${EVIDENCE}DIFF:\n${patch(voice)}`);
+  await g.handle('');
+  const reply = await g.handle('si');
   assert.match(reply, /listo, aprendí de 3 pares/, reply);
   assert.match(reply, /subido a main/, reply);
-  assert.equal(readFileSync(join(outer, voice), 'utf8'), 'nuevo\n');
-  assert.equal(sh(inner, 'status', '--porcelain'), '', 'the change is committed, nothing left dirty');
-  assert.match(sh(remote, 'log', '-1', '--format=%s'), /learn from shadow feedback \(3 pairs\)/);
-  assert.deepEqual(reviewed, [3, 2, 1]);
+  assert.equal(readFileSync(join(g.outer, voice), 'utf8'), 'nuevo\n');
+  assert.equal(g.sh(g.inner, 'status', '--porcelain'), '', 'the change is committed, nothing left dirty');
+  assert.match(g.sh(g.remote, 'log', '-1', '--format=%s'), /learn from shadow feedback \(3 pairs\)/);
+  assert.deepEqual(g.reviewed, [3, 2, 1]);
+});
+
+test('/aprender si applies a two-file diff the model wrote without `diff --git` lines (real git, --recount)', async () => {
+  const [voice, contacts] = ['private/skills/owner/references/voice.md', 'private/skills/owner/references/contacts.md'];
+  const diff = `--- a/${voice}\n+++ b/${voice}\n@@ -1,1 +1,2 @@\n viejo\n+regla nueva\n--- a/${contacts}\n+++ b/${contacts}\n@@ -1,1 +1,2 @@\n viejo\n+nota nueva\n`;
+  const g = realGit(`SUMMARY:\nx\nEVIDENCE:\nrule-1: 3, 2, 1\ncontact-1: 3, 2\nDIFF:\n${diff}`);
+  assert.match(await g.handle(''), /PROPUESTA/);
+  const reply = await g.handle('si');
+  assert.match(reply, /listo, aprendí de 3 pares/, reply);
+  assert.equal(readFileSync(join(g.outer, voice), 'utf8'), 'viejo\nregla nueva\n');
+  assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), 'viejo\nnota nueva\n');
+  assert.equal(g.sh(g.inner, 'status', '--porcelain'), '');
 });
