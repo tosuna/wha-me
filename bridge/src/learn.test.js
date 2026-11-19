@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,10 +21,13 @@ const PAIRS = [
 const patch = (path, body = '-viejo\n+nuevo\n') => `diff --git a/${path} b/${path}\nindex 1..2 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n${body}`;
 const VOICE = 'skills/example-support/references/voice.md';
 const GOOD = patch(VOICE, ' contexto\n--- separador\n-viejo\n+nuevo\n+-- otra regla\n');
+// FILES block: the full new content of one skill file (setup() writes each one as `contenido de <path>\n`).
+const block = (path, text) => `<file path="${path}">\n${text}</file>\n`;
+const GOOD_FILES = block(VOICE, 'nuevo\n-- otra regla\n');
 const SUMMARY = 'Reglas: Alex agrega "creo que" cuando no está seguro.\nAntes: "te sale" / Después: "creo que te sale".\nGael: le contesta él mismo las dudas de permisos.';
 
 const EVIDENCE = 'EVIDENCE:\nrule-1: 3, 2, 1\n';
-function setup({ pairs = PAIRS, output = `SUMMARY:\n${SUMMARY}\n${EVIDENCE}DIFF:\n\`\`\`diff\n${GOOD}\`\`\`\n`, git = {}, gate = { ok: true, text: 'evaluación: propuesta 0.70 >= actual 0.60' }, profile = PROFILE } = {}) {
+function setup({ pairs = PAIRS, output = `SUMMARY:\n${SUMMARY}\n${EVIDENCE}FILES:\n\`\`\`\n${GOOD_FILES}\`\`\`\n`, git = {}, gate = { ok: true, text: 'evaluación: propuesta 0.70 >= actual 0.60' }, profile = PROFILE } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'wa-learn-'));
   const repoDir = join(dir, 'repo');
   for (const f of skillPaths(profile.skill).context) {
@@ -69,12 +73,12 @@ test('/aprender uses the configured skill: its name, SKILL.md and learnable file
   const skill = { dir: 'owner/my-skill', name: 'my-skill', learnable: ['notes/style.md', 'notes/people.md'] };
   assert.deepEqual(skillPaths(skill), { dir: 'owner/my-skill', files: ['owner/my-skill/notes/style.md', 'owner/my-skill/notes/people.md'], context: ['owner/my-skill/SKILL.md', 'owner/my-skill/notes/style.md', 'owner/my-skill/notes/people.md'] });
   const style = 'owner/my-skill/notes/style.md';
-  const s = setup({ profile: { ...PROFILE, skill }, output: `SUMMARY:\nx\n${EVIDENCE}DIFF:\n${patch(style)}` });
+  const s = setup({ profile: { ...PROFILE, skill }, output: `SUMMARY:\nx\n${EVIDENCE}FILES:\n${block(style, 'nuevo\n')}` });
   const reply = await s.handle('');
   const [prompt] = s.prompts;
   assert.ok(prompt.startsWith('Mode: learning run for the my-skill skill'), prompt.slice(0, 80));
   for (const f of skillPaths(skill).context) assert.ok(prompt.includes(`contenido de ${f}`), f);
-  assert.ok(prompt.includes(`editing ONLY ${style}, owner/my-skill/notes/people.md.`));
+  assert.ok(prompt.includes(`ONLY ${style}, owner/my-skill/notes/people.md;`));
   assert.ok(!prompt.includes('voice.md') && !prompt.includes('example-support'));
   assert.ok(reply.includes(`${style} +1 -1`), reply);
   assert.ok(checkPatch(patch(VOICE), skillPaths(skill).files).error, 'the default skill files are not editable');
@@ -97,10 +101,13 @@ for (const [name, diff] of [
   test(`checkPatch refuses ${name}`, () => assert.ok(checkPatch(diff, SKILL_FILES).error, name));
 }
 
-test('parseProposal splits SUMMARY and DIFF and strips code fences', () => {
-  assert.deepEqual(parseProposal(`SUMMARY:\nhola\nDIFF:\n\`\`\`diff\n${GOOD}\`\`\``), { summary: 'hola', evidence: [], diff: GOOD });
-  assert.deepEqual(parseProposal('SUMMARY:\nnada que cambiar\nDIFF:\n'), { summary: 'nada que cambiar', evidence: [], diff: '' });
+test('parseProposal splits SUMMARY and FILES into { path, text } blocks and strips code fences', () => {
+  const two = `${GOOD_FILES}${block('b.md', 'uno\n\ndos')}`;
+  assert.deepEqual(parseProposal(`SUMMARY:\nhola\nFILES:\n\`\`\`\n${two}\`\`\``),
+    { summary: 'hola', evidence: [], files: [{ path: VOICE, text: 'nuevo\n-- otra regla\n' }, { path: 'b.md', text: 'uno\n\ndos\n' }] });
+  assert.deepEqual(parseProposal('SUMMARY:\nnada que cambiar\nFILES:\n'), { summary: 'nada que cambiar', evidence: [], files: [] });
   assert.throws(() => parseProposal('lo que sea'));
+  assert.throws(() => parseProposal(`SUMMARY:\nhola\nDIFF:\n${GOOD}`), 'the old DIFF format is no longer accepted');
 });
 
 test('/aprender builds the prompt from unreviewed pairs + current skill files, stores the proposal, reports summary + diffstat', async () => {
@@ -108,17 +115,22 @@ test('/aprender builds the prompt from unreviewed pairs + current skill files, s
   const reply = await s.handle('');
   const [prompt] = s.prompts;
   for (const x of ['<pairs>', '"verdict":"edited"', 'creo que te sale', '"contact":"Contacto B"', 'contenido de skills/example-support/references/voice.md',
-    'contenido de skills/example-support/references/contacts.md', 'contenido de skills/example-support/SKILL.md', 'untrusted', 'SUMMARY:', 'DIFF:',
+    'contenido de skills/example-support/references/contacts.md', 'contenido de skills/example-support/SKILL.md', 'untrusted', 'SUMMARY:', 'FILES:',
     'autoApprove', '"id":3', 'oiga y el botón de exportar?', '"register":"usted"', 'EVIDENCE:', 'at least 3 pairs']) assert.ok(prompt.includes(x), x);
   assert.match(s.said[0], /3 pares/);
   assert.ok(reply.includes(SUMMARY));
-  assert.ok(reply.includes(`${VOICE} +2 -2`));
+  assert.ok(reply.includes(`${VOICE} +2 -1`), reply);
   // Alex approves the actual lines, not only the model's own summary of them.
-  for (const line of ['-viejo', '+nuevo', '+-- otra regla']) assert.ok(reply.includes(line), line);
+  for (const line of [`-contenido de ${VOICE}`, '+nuevo', '+-- otra regla']) assert.ok(reply.includes(line), line);
   assert.match(reply, /\/aprender si/);
   const pending = JSON.parse(readFileSync(join(s.proposalsDir, 'pending.json'), 'utf8'));
   assert.deepEqual(pending.pairIds, [3, 2, 1]);
-  assert.equal(readFileSync(join(s.proposalsDir, pending.diff), 'utf8'), GOOD);
+  // The bridge generated the diff itself (git headers), from the current file to the model's full content.
+  const diff = readFileSync(join(s.proposalsDir, pending.diff), 'utf8');
+  assert.ok(diff.startsWith(`diff --git a/${VOICE} b/${VOICE}\n`), diff);
+  assert.ok(diff.includes(`--- a/${VOICE}\n+++ b/${VOICE}\n`), diff);
+  assert.deepEqual(checkPatch(diff, SKILL_FILES), { files: [{ path: VOICE, added: 2, removed: 1 }], error: null });
+  assert.equal(pending.sha256, createHash('sha256').update(diff).digest('hex'));
   assert.ok(readFileSync(join(s.proposalsDir, pending.summary), 'utf8').includes(SUMMARY));
   assert.deepEqual(s.gitCalls, []);
 });
@@ -130,7 +142,7 @@ test('/aprender with no unreviewed pairs does not run the agent', async () => {
 });
 
 test('/aprender: a proposal matching a secret pattern is never stored', async () => {
-  const s = setup({ output: `SUMMARY:\ntoken ghp_x\nDIFF:\n${GOOD}` });
+  const s = setup({ output: `SUMMARY:\ntoken ghp_x\nFILES:\n${GOOD_FILES}` });
   assert.match(await s.handle(''), /secreto/);
   assert.ok(!existsSync(join(s.proposalsDir, 'pending.json')));
 });
@@ -157,13 +169,22 @@ test('/aprender si applies, commits only the skill files, pushes main and marks 
   assert.match(await s.handle('si'), /no hay propuesta pendiente/);
 });
 
-test('/aprender si refuses a patch touching anything outside the three skill files: no git, nothing reviewed', async () => {
-  const s = setup({ output: `SUMMARY:\nx\n${EVIDENCE}DIFF:\n${GOOD}${patch('bridge/contacts.json')}` });
-  await s.handle('');
-  assert.match(await s.handle('si'), /rechaz/i);
-  assert.deepEqual([s.gitCalls, s.reviewed], [[], []]);
-  assert.ok(existsSync(join(s.proposalsDir, 'pending.json')), 'still pending: /aprender no discards it');
-});
+for (const [name, extra] of [
+  ['another path', block('bridge/contacts.json', '{}\n')],
+  ['another skill file', block('skills/example-support/references/database.md', 'x\n')],
+  // SKILL.md holds the agent's security rules: learned voice data never edits it (it is context only).
+  ['SKILL.md', block('skills/example-support/SKILL.md', 'x\n')],
+  ['a path escaping through ..', block('skills/example-support/../../bridge/src/agent.js', 'x\n')],
+  ['a learnable file twice', block(VOICE, 'otra versión\n')],
+]) {
+  test(`/aprender refuses a FILES block for ${name}: nothing pending, no git, nothing reviewed`, async () => {
+    const s = setup({ output: `SUMMARY:\nx\n${EVIDENCE}FILES:\n${GOOD_FILES}${extra}` });
+    assert.match(await s.handle(''), /^ERROR \/aprender: archivo/);
+    assert.ok(!existsSync(join(s.proposalsDir, 'pending.json')));
+    assert.match(await s.handle('si'), /no hay propuesta pendiente/);
+    assert.deepEqual([s.gitCalls, s.reviewed], [[], []]);
+  });
+}
 
 test('/aprender si refuses off main or with uncommitted changes in the skill files', async () => {
   for (const git of [{ 'rev-parse --abbrev-ref HEAD': 'feat/x\n' }, { 'status --porcelain': ' M skills/example-support/references/voice.md\n' }]) {
@@ -210,8 +231,8 @@ test('/aprender tells the model the review size limit, so the proposal fits inst
 });
 
 test('/aprender: a diff too long to review on WhatsApp is not offered (nothing pending)', async () => {
-  const big = patch(VOICE, `${'+regla larga de voz\n'.repeat(Math.ceil(MAX_SHOWN / 10))}`);
-  const s = setup({ output: `SUMMARY:\nx\n${EVIDENCE}DIFF:\n${big}` });
+  const big = block(VOICE, `contenido de ${VOICE}\n${'regla larga de voz\n'.repeat(Math.ceil(MAX_SHOWN / 10))}`);
+  const s = setup({ output: `SUMMARY:\nx\n${EVIDENCE}FILES:\n${big}` });
   assert.match(await s.handle(''), /demasiado grande/);
   assert.ok(!existsSync(join(s.proposalsDir, 'pending.json')));
 });
@@ -220,7 +241,8 @@ test('/aprender si refuses a diff that changed after it was shown', async () => 
   const s = setup();
   await s.handle('');
   const pending = JSON.parse(readFileSync(join(s.proposalsDir, 'pending.json'), 'utf8'));
-  writeFileSync(join(s.proposalsDir, pending.diff), GOOD.replace('+nuevo', '+otra cosa'));
+  const file = join(s.proposalsDir, pending.diff);
+  writeFileSync(file, readFileSync(file, 'utf8').replace('+nuevo', '+otra cosa'));
   assert.match(await s.handle('si'), /cambió/);
   assert.deepEqual([s.gitCalls, s.reviewed], [[], []]);
 });
@@ -228,9 +250,9 @@ test('/aprender si refuses a diff that changed after it was shown', async () => 
 // --- minimum evidence: each rule in the diff cites >= 3 pairs (contact notes >= 2), checked deterministically ---
 
 test('parseProposal reads the EVIDENCE block: one line per rule/note with its cited pair ids', () => {
-  const p = parseProposal(`SUMMARY:\nhola\nEVIDENCE:\nrule-1: 3, 2,1\ncontact-1: 4,4,5\nDIFF:\n${GOOD}`);
+  const p = parseProposal(`SUMMARY:\nhola\nEVIDENCE:\nrule-1: 3, 2,1\ncontact-1: 4,4,5\nFILES:\n${GOOD_FILES}`);
   assert.deepEqual(p.evidence, [{ key: 'rule-1', kind: 'rule', ids: [3, 2, 1] }, { key: 'contact-1', kind: 'contact', ids: [4, 5] }]);
-  assert.equal(p.diff, GOOD);
+  assert.deepEqual(p.files, [{ path: VOICE, text: 'nuevo\n-- otra regla\n' }]);
 });
 
 for (const [name, evidence, re] of [
@@ -239,7 +261,7 @@ for (const [name, evidence, re] of [
   ['a diff with no EVIDENCE for voice.md', '', /voice\.md/],
 ]) {
   test(`/aprender rejects ${name}: nothing pending`, async () => {
-    const s = setup({ output: `SUMMARY:\nx\n${evidence}DIFF:\n${GOOD}` });
+    const s = setup({ output: `SUMMARY:\nx\n${evidence}FILES:\n${GOOD_FILES}` });
     const reply = await s.handle('');
     assert.match(reply, /evidencia insuficiente/);
     assert.match(reply, re);
@@ -249,9 +271,9 @@ for (const [name, evidence, re] of [
 
 test('/aprender: contacts.md notes need >= 2 cited pairs', async () => {
   const CONTACTS = 'skills/example-support/references/contacts.md';
-  const ok = setup({ output: `SUMMARY:\nx\nEVIDENCE:\ncontact-1: 3,2\nDIFF:\n${patch(CONTACTS)}` });
-  assert.doesNotMatch(await ok.handle(''), /evidencia/);
-  const bad = setup({ output: `SUMMARY:\nx\nEVIDENCE:\ncontact-1: 3\nDIFF:\n${patch(CONTACTS)}` });
+  const ok = setup({ output: `SUMMARY:\nx\nEVIDENCE:\ncontact-1: 3,2\nFILES:\n${block(CONTACTS, 'nota\n')}` });
+  assert.match(await ok.handle(''), /PROPUESTA/);
+  const bad = setup({ output: `SUMMARY:\nx\nEVIDENCE:\ncontact-1: 3\nFILES:\n${block(CONTACTS, 'nota\n')}` });
   assert.match(await bad.handle(''), /evidencia insuficiente: contact-1/);
 });
 
@@ -285,7 +307,8 @@ test('/aprender si: a diff changed while the eval ran is refused (hash re-checke
   const s = setup();
   await s.handle('');
   const pending = JSON.parse(readFileSync(join(s.proposalsDir, 'pending.json'), 'utf8'));
-  s.onEval(() => writeFileSync(join(s.proposalsDir, pending.diff), GOOD.replace('+nuevo', '+otra cosa')));
+  const file = join(s.proposalsDir, pending.diff);
+  s.onEval(() => writeFileSync(file, readFileSync(file, 'utf8').replace('+nuevo', '+otra cosa')));
   assert.match(await s.handle('si'), /cambió/);
   assert.ok(!s.gitCalls.some((c) => (c[0] === 'apply' && c[1] !== '--check') || c[0] === 'commit'));
 });
@@ -321,12 +344,12 @@ function realGit(output, content = 'viejo\n') {
   process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = 't@t';
   const learner = createLearner({ profile: { ...PROFILE, skill }, feedback, agent, repoDir: outer, proposalsDir: join(dir, 'proposals'), evaluator, leaks: () => false });
   const say = async () => {};
-  return { handle: (arg) => learner.handle(arg, say), sh, outer, inner, remote, reviewed };
+  return { handle: (arg) => learner.handle(arg, say), sh, outer, inner, remote, reviewed, proposalsDir: join(dir, 'proposals') };
 }
 
 test('/aprender si commits and pushes in the repo that owns the skill, even a nested one the outer repo ignores (real git)', async () => {
   const voice = 'private/skills/owner/references/voice.md';
-  const g = realGit(`SUMMARY:\nx\n${EVIDENCE}DIFF:\n${patch(voice)}`);
+  const g = realGit(`SUMMARY:\nx\n${EVIDENCE}FILES:\n${block(voice, 'nuevo\n')}`);
   await g.handle('');
   const reply = await g.handle('si');
   assert.match(reply, /listo, aprendí de 3 pares/, reply);
@@ -337,24 +360,46 @@ test('/aprender si commits and pushes in the repo that owns the skill, even a ne
   assert.deepEqual(g.reviewed, [3, 2, 1]);
 });
 
-test('/aprender si applies a two-file diff the model wrote without `diff --git` lines (real git, --recount)', async () => {
+test('/aprender: full new files with lines inserted mid-file between long lines become a bridge-made diff that applies (real git)', async () => {
   const [voice, contacts] = ['private/skills/owner/references/voice.md', 'private/skills/owner/references/contacts.md'];
-  const diff = `--- a/${voice}\n+++ b/${voice}\n@@ -1,1 +1,2 @@\n viejo\n+regla nueva\n--- a/${contacts}\n+++ b/${contacts}\n@@ -1,1 +1,2 @@\n viejo\n+nota nueva\n`;
-  const g = realGit(`SUMMARY:\nx\nEVIDENCE:\nrule-1: 3, 2, 1\ncontact-1: 3, 2\nDIFF:\n${diff}`);
-  assert.match(await g.handle(''), /PROPUESTA/);
+  // Lines over 300 characters around the insertion: a model copying them as diff context used to truncate them.
+  const long = (c) => `${c}: ${'palabra larga con acentos y comas, '.repeat(12)}fin`;
+  const content = `# Voz\n${long('uno')}\n${long('dos')}\n${long('tres')}\n`;
+  const insert = (line) => content.replace(`${long('dos')}\n`, `${long('dos')}\n${line}\n`);
+  const [newVoice, newContacts] = [insert('- regla nueva'), insert('- nota nueva')];
+  assert.ok(long('dos').length > 300);
+  const g = realGit(`SUMMARY:\nx\nEVIDENCE:\nrule-1: 3, 2, 1\ncontact-1: 3, 2\nFILES:\n${block(voice, newVoice)}${block(contacts, newContacts)}`, content);
+  const proposal = await g.handle('');
+  assert.match(proposal, /PROPUESTA/, proposal);
+  const shown = proposal.split('CAMBIOS (revisa esto, no solo el resumen):\n')[1].split('\n\n')[0];
+  // git orders the diff by path: contacts.md before voice.md.
+  assert.equal(shown, '+- nota nueva\n+- regla nueva', 'only the inserted lines are shown');
+  assert.ok(proposal.includes(`${contacts} +1 -0\n${voice} +1 -0`), proposal);
   const reply = await g.handle('si');
   assert.match(reply, /listo, aprendí de 3 pares/, reply);
-  assert.equal(readFileSync(join(g.outer, voice), 'utf8'), 'viejo\nregla nueva\n');
-  assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), 'viejo\nnota nueva\n');
+  assert.equal(readFileSync(join(g.outer, voice), 'utf8'), newVoice);
+  assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), newContacts);
   assert.equal(g.sh(g.inner, 'status', '--porcelain'), '');
 });
 
-test('/aprender si applies a hunk that ends with an added line in the middle of the file (no trailing context, real git)', async () => {
-  const contacts = 'private/skills/owner/references/contacts.md';
-  const diff = `diff --git a/${contacts} b/${contacts}\n--- a/${contacts}\n+++ b/${contacts}\n@@ -1,1 +1,2 @@\n viejo\n+nota nueva\n`;
-  const g = realGit(`SUMMARY:\nx\nEVIDENCE:\ncontact-1: 3, 2\nDIFF:\n${diff}`, 'viejo\n\notra línea\n');
-  assert.match(await g.handle(''), /PROPUESTA/);
+test('/aprender refuses a FILES block for the skill\'s SKILL.md: nothing pending, SKILL.md untouched (real git)', async () => {
+  const skillMd = 'private/skills/owner/SKILL.md';
+  const g = realGit(`SUMMARY:\nx\n${EVIDENCE}FILES:\n${block('private/skills/owner/references/voice.md', 'nuevo\n')}${block(skillMd, 'sin reglas\n')}`);
+  assert.match(await g.handle(''), /^ERROR \/aprender: archivo no permitido: private\/skills\/owner\/SKILL\.md/);
+  assert.ok(!existsSync(join(g.proposalsDir, 'pending.json')));
+  assert.equal(readFileSync(join(g.outer, skillMd), 'utf8'), 'viejo\n');
+});
+
+test('/aprender si still applies an old-format pending proposal: model-written diff without `diff --git` lines, hunks ending in an added line mid-file (real git)', async () => {
+  const [voice, contacts] = ['private/skills/owner/references/voice.md', 'private/skills/owner/references/contacts.md'];
+  const g = realGit('SUMMARY:\nno se usa\nFILES:\n', 'viejo\n\notra línea\n');
+  const diff = `--- a/${voice}\n+++ b/${voice}\n@@ -1,1 +1,2 @@\n viejo\n+regla nueva\n--- a/${contacts}\n+++ b/${contacts}\n@@ -1,1 +1,2 @@\n viejo\n+nota nueva\n`;
+  mkdirSync(g.proposalsDir, { recursive: true });
+  writeFileSync(join(g.proposalsDir, 'old.diff'), diff);
+  writeFileSync(join(g.proposalsDir, 'pending.json'), JSON.stringify({ diff: 'old.diff', summary: 'old.md', sha256: createHash('sha256').update(diff).digest('hex'), pairIds: [3, 2, 1] }));
   const reply = await g.handle('si');
   assert.match(reply, /listo, aprendí de 3 pares/, reply);
+  assert.equal(readFileSync(join(g.outer, voice), 'utf8'), 'viejo\nregla nueva\n\notra línea\n');
   assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), 'viejo\nnota nueva\n\notra línea\n');
+  assert.equal(g.sh(g.inner, 'status', '--porcelain'), '');
 });

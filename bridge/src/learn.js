@@ -13,7 +13,8 @@ import { languageName } from './language.js';
 // or discards (/aprender no). The pairs carry contact-influenced text, so a proposal is untrusted: only the config's
 // learnable files (profile.skill.learnable: voice rules, contact notes) can change (SKILL.md, the security rules, is
 // context only), the owner sees the actual changed lines before approving, and what they approve is pinned by hash.
-// contacts.json permissions never change. Every rule in the diff must cite enough pairs (EVIDENCE), and /aprender si
+// contacts.json permissions never change. The model returns the full new content of the files it changes and the bridge
+// builds the diff itself with git (a model-written diff miscopies context lines). Every rule in the diff must cite enough pairs (EVIDENCE), and /aprender si
 // applies only after the offline eval gate (see learn-eval.js) passes.
 
 // profile.skill -> paths relative to repoDir (git runs there): the skill dir, its learnable files (`files`, [voice rules,
@@ -57,7 +58,7 @@ export function checkPatch(diff, allowed) {
   return { files, error: files.length ? null : 'la propuesta no trae cambios' };
 }
 
-// A model may omit the `diff --git` line before a file's `---`/`+++` header; with --recount git then reads the next file's
+// Proposals pending from before FILES were model-written diffs: a model may omit the `diff --git` line before a file's `---`/`+++` header; with --recount git then reads the next file's
 // header as part of the previous hunk ("patch does not apply"). Adds the missing lines: framing only, the content is unchanged.
 export function withGitHeaders(diff) {
   const lines = String(diff).split('\n');
@@ -74,9 +75,9 @@ export function withGitHeaders(diff) {
   }).join('\n');
 }
 
-// --recount: a model's hunk counts are often wrong. --unidiff-zero: without it, a hunk that ends with an added line (no
-// trailing context) must match at the end of the file, and one the model wrote mid-file "does not apply". Context lines
-// still have to match.
+// For old model-written diffs (bridge-made ones need neither): --recount: a model's hunk counts are often wrong.
+// --unidiff-zero: without it, a hunk that ends with an added line (no trailing context) must match at the end of the
+// file, and one the model wrote mid-file "does not apply". Context lines still have to match.
 const APPLY = ['--recount', '--unidiff-zero'];
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
@@ -92,14 +93,38 @@ const changedLines = (diff) => {
   return out.join('\n');
 };
 
-// EVIDENCE lines: `rule-1: 12, 15, 18` / `contact-1: 12, 14` (distinct ids); other lines are ignored.
+// EVIDENCE lines: `rule-1: 12, 15, 18` / `contact-1: 12, 14` (distinct ids); other lines are ignored. FILES: one
+// `<file path="...">` block per changed file with its full new content (text always ends with a newline).
 export function parseProposal(text) {
-  const m = String(text).match(/SUMMARY:[ \t]*\n?([\s\S]*?)\n[ \t]*(?:EVIDENCE:[ \t]*\n?([\s\S]*?)\n[ \t]*)?DIFF:[ \t]*\n?([\s\S]*)$/);
-  if (!m) throw new Error('la salida no trae SUMMARY/DIFF');
+  const m = String(text).match(/SUMMARY:[ \t]*\n?([\s\S]*?)\n[ \t]*(?:EVIDENCE:[ \t]*\n?([\s\S]*?)\n[ \t]*)?FILES:[ \t]*\n?([\s\S]*)$/);
+  if (!m) throw new Error('la salida no trae SUMMARY/FILES');
   const evidence = String(m[2] ?? '').split('\n').map((l) => l.match(/^\s*(rule|contact)-(\d+)\s*:\s*(.*)$/)).filter(Boolean)
     .map(([, kind, n, ids]) => ({ key: `${kind}-${n}`, kind, ids: [...new Set(ids.split(/[\s,]+/).filter(Boolean).map(Number))] }));
-  const diff = m[3].replace(/^\s*```[\w-]*\n/, '').replace(/\n?```\s*$/, '').trim();
-  return { summary: m[1].trim(), evidence, diff: diff ? `${diff}\n` : '' };
+  const body = m[3].replace(/^\s*```[\w-]*\n/, '').replace(/\n?```\s*$/, '');
+  const files = [...body.matchAll(/<file path="([^"]*)">\n?([\s\S]*?)\n?<\/file>/g)].map(([, path, t]) => ({ path, text: `${t}\n` }));
+  return { summary: m[1].trim(), evidence, files };
+}
+
+// Unified diff from each file's current content (repoDir) to the model's, with a/ b/ git headers. Real git, not the
+// injectable execFile: a local computation in a temp dir. '' when nothing changes.
+async function fileDiff(repoDir, files) {
+  if (!files.length) return '';
+  const tmp = mkdtempSync(join(tmpdir(), 'wa-learn-diff-'));
+  try {
+    for (const { path, text } of files) {
+      for (const [side, t] of [['a', readFileSync(join(repoDir, path), 'utf8')], ['b', text.endsWith('\n') ? text : `${text}\n`]]) {
+        mkdirSync(join(tmp, side, path, '..'), { recursive: true });
+        writeFileSync(join(tmp, side, path), t);
+      }
+    }
+    await promisify(nodeExecFile)('git', ['-C', tmp, '-c', 'core.quotepath=false', 'diff', '--no-index', '--no-prefix', '--no-color', '--no-ext-diff', '--no-textconv', '--', 'a', 'b']);
+    return '';
+  } catch (e) {
+    if (e.code === 1) return e.stdout; // exit 1: there are differences
+    throw e;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // Error text or null. Each EVIDENCE line needs MIN_EVIDENCE distinct ids among the pairs shown to the model, and every
@@ -140,21 +165,22 @@ export const learnPrompt = (pairs, files, profile) => [
   'Produce, only from patterns the pairs actually show (cite them by id; no speculative rules):',
   `(a) concrete voice rules, each with a before (draft) / after (what ${profile.name} sent) example;`,
   `(b) per-contact observations of the freedoms ${profile.name} gives: what they do themselves for whom, what they answer vs ignore, register;`,
-  `(c) a unified diff (git apply format, a/ and b/ prefixes) editing ONLY ${skillPaths(profile.skill).files.join(', ')}. No new, deleted or renamed files.`,
-  'Keep the diff small and in the files\' existing style; extend existing sections instead of duplicating them.',
-  `Hard limit: the diff's + and - lines together must be at most ${MAX_SHOWN} characters, or the proposal is dropped unseen. If more is warranted, keep the rules with the most evidence and list the rest in the summary for a later run.`,
+  `(c) the full new content of each skill file you change, inside <file path="..."> blocks: ONLY ${skillPaths(profile.skill).files.join(', ')};`,
+  'unchanged files omitted; no new, deleted or renamed files. Preserve exactly every line you do not intend to change.',
+  'Keep the change small and in the files\' existing style; extend existing sections instead of duplicating them.',
+  `Hard limit: the lines you change (what a diff shows as + and -) together must be at most ${MAX_SHOWN} characters, or the proposal is dropped unseen. If more is warranted, keep the rules with the most evidence and list the rest in the summary for a later run.`,
   'Never change permissions (contacts.json autoApprove, user_id, canTriggerImplementation): if the evidence suggests one,',
   `only suggest it in the summary for ${profile.name} to do by hand.`,
-  `Minimum evidence: every voice rule in the diff must be shown by at least ${MIN_EVIDENCE.rule} pairs, every per-contact note by at least ${MIN_EVIDENCE.contact}.`,
-  'A pattern with less evidence goes only in the summary under "Observaciones (sin evidencia suficiente)", never in the diff.',
+  `Minimum evidence: every voice rule you add must be shown by at least ${MIN_EVIDENCE.rule} pairs, every per-contact note by at least ${MIN_EVIDENCE.contact}.`,
+  'A pattern with less evidence goes only in the summary under "Observaciones (sin evidencia suficiente)", never in the files.',
   '',
   'Answer strictly in this format, nothing else:',
   'SUMMARY:',
   `<in ${languageName(profile.language)}, for ${profile.name}'s WhatsApp, at most ~1500 characters: the rules with before/after, per-contact notes, permission suggestions>`,
   'EVIDENCE:',
-  '<one line per voice rule (rule-N) or contact note (contact-N) in the diff, with the pair ids that show it, e.g. "rule-1: 12, 15, 18"; nothing if no diff>',
-  'DIFF:',
-  '<the unified diff, or nothing if no change is warranted>',
+  '<one line per voice rule (rule-N) or contact note (contact-N) you add, with the pair ids that show it, e.g. "rule-1: 12, 15, 18"; nothing if no change>',
+  'FILES:',
+  '<one <file path="...">full new content</file> block per changed file, or nothing if no change is warranted>',
 ].join('\n');
 
 const BRIDGE = fileURLToPath(new URL('..', import.meta.url));
@@ -186,7 +212,15 @@ export function createLearner({
     } catch (e) {
       return `ERROR /aprender: ${e.message}`;
     }
-    const { summary, evidence, diff } = proposal;
+    const { summary, evidence, files: changed } = proposal;
+    const bad = changed.find((f, i) => !SKILL_FILES.includes(f.path) || changed.findIndex((g) => g.path === f.path) !== i);
+    if (bad) return `ERROR /aprender: archivo ${SKILL_FILES.includes(bad.path) ? 'repetido' : 'no permitido'}: ${bad.path}; no quedó pendiente, manda /aprender otra vez`;
+    let diff;
+    try {
+      diff = await fileDiff(repoDir, changed);
+    } catch (e) {
+      return `ERROR /aprender: no pude generar el diff: ${e.message}`;
+    }
     if (leaks(summary) || leaks(diff)) return 'ERROR /aprender: la propuesta coincide con un patrón de secreto; no se guardó';
     const weak = checkEvidence(evidence, checkPatch(diff, SKILL_FILES).files, new Set(pairs.map((p) => p.id)), SKILL_FILES);
     if (weak) return `ERROR /aprender: ${weak}; no quedó pendiente, manda /aprender otra vez`;
