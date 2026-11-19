@@ -74,6 +74,11 @@ export function withGitHeaders(diff) {
   }).join('\n');
 }
 
+// --recount: a model's hunk counts are often wrong. --unidiff-zero: without it, a hunk that ends with an added line (no
+// trailing context) must match at the end of the file, and one the model wrote mid-file "does not apply". Context lines
+// still have to match.
+const APPLY = ['--recount', '--unidiff-zero'];
+
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 // The diff's + / - content lines, exactly what /aprender si would apply. File headers are dropped with the same rule as
 // checkPatch (`--- ` only when the next line is `+++ `), so no content line can hide as a header.
@@ -206,7 +211,7 @@ export function createLearner({
     const tmp = mkdtempSync(join(tmpdir(), 'wa-learn-eval-'));
     try {
       cpSync(join(repoDir, SKILL), join(tmp, SKILL), { recursive: true });
-      await execFile('git', ['-C', tmp, 'apply', '--recount', file]);
+      await execFile('git', ['-C', tmp, 'apply', ...APPLY, file]);
       return await evaluator.run({ pairs: feedback.list({ unreviewed: false }) ?? [], proposedDir: join(tmp, SKILL), say });
     } catch (e) {
       return { ok: false, text: `no apliqué: no pude preparar la evaluación: ${e.message}` };
@@ -231,7 +236,7 @@ export function createLearner({
       if (branch !== 'main') return `no apliqué: el repo está en ${branch}, no en main`;
       const dirty = await skillGit('status', '--porcelain', '--', ...paths);
       if (dirty) return `no apliqué: hay cambios sin commit en la skill:\n${dirty}`;
-      await git('apply', '--check', '--recount', patchFile);
+      await git('apply', '--check', ...APPLY, patchFile);
     } catch (e) {
       return `no apliqué la propuesta: ${e.message}`;
     }
@@ -239,7 +244,7 @@ export function createLearner({
     if (!verdict.ok) return verdict.text;
     if (sha256(readFileSync(file, 'utf8')) !== p.sha256) return 'rechazada: el diff cambió durante la evaluación. Nada aplicado; manda /aprender no y /aprender otra vez';
     try {
-      await git('apply', '--recount', patchFile);
+      await git('apply', ...APPLY, patchFile);
       await skillGit('commit', '-m', `feat(skill): learn from shadow feedback (${p.pairIds.length} pairs)`, '--', ...paths);
     } catch (e) {
       return `no apliqué la propuesta: ${e.message}`;

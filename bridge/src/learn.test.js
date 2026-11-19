@@ -144,8 +144,8 @@ test('/aprender si applies, commits only the skill files, pushes main and marks 
   assert.deepEqual(s.gitCalls, [
     ['rev-parse', '--abbrev-ref', 'HEAD'],
     ['status', '--porcelain', '--', 'references/voice.md'],
-    ['apply', '--check', '--recount', diffFile],
-    ['apply', '--recount', diffFile],
+    ['apply', '--check', '--recount', '--unidiff-zero', diffFile],
+    ['apply', '--recount', '--unidiff-zero', diffFile],
     ['commit', '-m', 'feat(skill): learn from shadow feedback (3 pairs)', '--', 'references/voice.md'],
     ['rev-parse', '--short', 'HEAD'],
     ['push', 'origin', 'main'],
@@ -291,7 +291,7 @@ test('/aprender si: a diff changed while the eval ran is refused (hash re-checke
 });
 
 // A real outer repo with the skill in its own nested repo (private/, ignored by the outer one) pushing to a bare remote.
-function realGit(output) {
+function realGit(output, content = 'viejo\n') {
   const dir = mkdtempSync(join(tmpdir(), 'wa-learn-nested-'));
   const sh = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' }).toString().trim();
   const id = ['-c', 'user.name=t', '-c', 'user.email=t@t'];
@@ -307,7 +307,7 @@ function realGit(output) {
   sh(dir, 'init', '-q', '-b', 'main', inner);
   for (const f of skillPaths(skill).context) {
     mkdirSync(join(outer, f, '..'), { recursive: true });
-    writeFileSync(join(outer, f), 'viejo\n');
+    writeFileSync(join(outer, f), content);
   }
   sh(inner, ...id, 'add', '.');
   sh(inner, ...id, 'commit', '-qm', 'skill');
@@ -347,4 +347,14 @@ test('/aprender si applies a two-file diff the model wrote without `diff --git` 
   assert.equal(readFileSync(join(g.outer, voice), 'utf8'), 'viejo\nregla nueva\n');
   assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), 'viejo\nnota nueva\n');
   assert.equal(g.sh(g.inner, 'status', '--porcelain'), '');
+});
+
+test('/aprender si applies a hunk that ends with an added line in the middle of the file (no trailing context, real git)', async () => {
+  const contacts = 'private/skills/owner/references/contacts.md';
+  const diff = `diff --git a/${contacts} b/${contacts}\n--- a/${contacts}\n+++ b/${contacts}\n@@ -1,1 +1,2 @@\n viejo\n+nota nueva\n`;
+  const g = realGit(`SUMMARY:\nx\nEVIDENCE:\ncontact-1: 3, 2\nDIFF:\n${diff}`, 'viejo\n\notra línea\n');
+  assert.match(await g.handle(''), /PROPUESTA/);
+  const reply = await g.handle('si');
+  assert.match(reply, /listo, aprendí de 3 pares/, reply);
+  assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), 'viejo\nnota nueva\n\notra línea\n');
 });
