@@ -137,6 +137,7 @@ export const learnPrompt = (pairs, files, profile) => [
   `(b) per-contact observations of the freedoms ${profile.name} gives: what they do themselves for whom, what they answer vs ignore, register;`,
   `(c) a unified diff (git apply format, a/ and b/ prefixes) editing ONLY ${skillPaths(profile.skill).files.join(', ')}. No new, deleted or renamed files.`,
   'Keep the diff small and in the files\' existing style; extend existing sections instead of duplicating them.',
+  `Hard limit: the diff's + and - lines together must be at most ${MAX_SHOWN} characters, or the proposal is dropped unseen. If more is warranted, keep the rules with the most evidence and list the rest in the summary for a later run.`,
   'Never change permissions (contacts.json autoApprove, user_id, canTriggerImplementation): if the evidence suggests one,',
   `only suggest it in the summary for ${profile.name} to do by hand.`,
   `Minimum evidence: every voice rule in the diff must be shown by at least ${MIN_EVIDENCE.rule} pairs, every per-contact note by at least ${MIN_EVIDENCE.contact}.`,

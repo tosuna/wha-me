@@ -202,6 +202,13 @@ test('/aprender no discards the proposal and marks the pairs reviewed; unknown a
   assert.match(await s.handle('quizas'), /\/aprender si/);
 });
 
+test('/aprender tells the model the review size limit, so the proposal fits instead of being dropped unseen', async () => {
+  const s = setup();
+  await s.handle('');
+  assert.ok(s.prompts[0].includes(`at most ${MAX_SHOWN} characters`), 'the limit is in the prompt');
+  assert.match(s.prompts[0], /most evidence/);
+});
+
 test('/aprender: a diff too long to review on WhatsApp is not offered (nothing pending)', async () => {
   const big = patch(VOICE, `${'+regla larga de voz\n'.repeat(Math.ceil(MAX_SHOWN / 10))}`);
   const s = setup({ output: `SUMMARY:\nx\n${EVIDENCE}DIFF:\n${big}` });
