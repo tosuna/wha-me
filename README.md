@@ -129,6 +129,12 @@ A link shares the memory under the WhatsApp contact's identity; unlinking splits
 - `live` (optional): `true` handles this contact as if shadow mode were off (replies are sent, normal delay,
   business hours apply unless `anyHour`) while every other contact stays in shadow.
   Useful to trial a single chat live while the rest stays in shadow.
+- `investigate` (optional): `true` lets a reply run that ends with a `bug` or `outage` handoff launch, in the background,
+  an investigation run (up to 20 min, `opus` unless `model`, `--effort` from `investigateEffort`, default `high`) that
+  can also read production infrastructure through the read-only infra MCP (`bridge/src/infra-mcp.js`; needs
+  `knowledge.tenants.<tenant>.infra` in the config and a valid AWS CLI session on the Mac). Shadow or live, its reply is
+  only a draft in the self-chat: `/investigar si <n>` sends it, `/investigar no <n>` discards it, `/investigar <n>`
+  retries one waiting for AWS or failed, `/investigar` lists the open ones. Drafts live in memory: a restart drops them.
 
 ### Telegram
 

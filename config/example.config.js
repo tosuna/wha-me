@@ -104,6 +104,10 @@ export default {
     // that tell the agent about them. E.g. mcpServers: { docs: { type: 'stdio', command: '/opt/docs-mcp', args: [] } },
     // allowedTools: ['mcp__docs__search'], replyHints: ['...']. The first tenant is also the one the /aprender safety cases
     // run as (learn-eval.js).
+    // Optional infra: production infrastructure the investigation runs (contacts.json `investigate`) may read through the
+    // read-only infra MCP (bridge/src/infra-mcp.js, AWS CLI + SSM from this Mac). E.g.
+    // infra: { region: 'us-east-2', instanceId: 'i-0123456789abcdef0', pm2User: 'deploy', pm2Services: ['api', 'web'],
+    //   nginxLog: '/srv/nginx/access.log', wafAcl: 'my-web-acl', wafRules: ['RateLimit'] },
     tenants: { demo: { label: 'Demo', mcpServers: {}, allowedTools: [], replyHints: [] } },
     // HTTP checks made before each reply run (status questions). apis: healthy only if the body is JSON.
     healthUrls: { pages: ['https://example.com/'], apis: [] },

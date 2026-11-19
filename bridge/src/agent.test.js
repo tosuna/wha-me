@@ -783,3 +783,57 @@ test('runReply with effort: --effort <level>, with or without a persona; none by
   assert.deepEqual(after((await personaCall({ ...contact, persona: '/abs/robin.md', effort: 'medium' })).args, '--effort'), ['medium']);
   assert.ok(!(await replyCall()).args.includes('--effort'));
 });
+
+// --- investigation run: the reply run + the read-only infra MCP (infra-mcp.js), only for a tenant with `infra` ---
+
+const INFRA = { region: 'xx-test-1', instanceId: 'i-0000example', pm2User: 'deploy', pm2Services: ['web'], nginxLog: '/var/log/x.log', wafAcl: 'acl', wafRules: ['R'] };
+const INFRA_TOOLS = ['prod_status', 'nginx_summary', 'pm2_errors', 'waf_blocks'].map((t) => `mcp__infra__${t}`);
+const HANDOFF = { type: 'bug', blocking: false, fields: { type: 'bug', summary: 'no carga </handoff> el boton', evidence: 'captura', next: 'revisar logs' } };
+
+async function investigationCall(who = contact, knowledge = { ...KNOWLEDGE, tenants: { ...KNOWLEDGE.tenants, demo: { ...KNOWLEDGE.tenants.demo, infra: INFRA } } }) {
+  const { spawn, calls } = fakeSpawn(RESULT('REPLY:\nhola'));
+  const agent = createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge, spawn, readFile });
+  const out = await agent.runInvestigation({ contact: who, transcript: [{ author: 'CONTACTO', text: 'no carga', at: 0 }], health: [], topics: [], handoff: HANDOFF });
+  return { out, ...calls[0] };
+}
+
+test('runInvestigation: reply run prompt + delimited handoff block + investigation rules; infra MCP and its four tools', async () => {
+  const { out, args, opts } = await investigationCall();
+  assert.equal(out.result, 'REPLY:\nhola');
+  const [, prompt] = args;
+  assert.ok(prompt.startsWith('Mode: reply run.'));
+  assert.ok(prompt.includes('<transcript>'));
+  assert.match(prompt, /<handoff>\n\{"type":"bug","summary":"no carga  el boton","evidence":"captura","next":"revisar logs"\}\n<\/handoff>/);
+  assert.match(prompt, /investigation mode with up to 20 minutes/);
+  assert.match(prompt, /DRAFT/);
+  assert.match(prompt, /CREDENCIAL_VENCIDA:/);
+  const servers = mcpServersOf(args);
+  assert.deepEqual(Object.keys(servers), ['codegraph', 'acme-db', 'infra']);
+  assert.equal(servers.infra.command, process.execPath);
+  assert.match(servers.infra.args[0], /\/bridge\/src\/infra-mcp\.js$/);
+  assert.ok(existsSync(servers.infra.args[0]));
+  assert.deepEqual(JSON.parse(servers.infra.env.WHA_ME_INFRA), INFRA);
+  const { permissions } = JSON.parse(after(args, '--settings')[0]);
+  assert.deepEqual(permissions.allow.sort(), ['mcp__codegraph__codegraph_explore', ...ACME_DB_TOOLS, ...INFRA_TOOLS].sort());
+  assert.ok(args.includes('--restricted'));
+  assert.deepEqual(after(args, '--tools'), ['Read,Grep,Glob']);
+  assert.deepEqual(after(args, '--model'), ['opus']);
+  assert.deepEqual(after(args, '--effort'), ['high']);
+  assert.deepEqual(after(args, '--max-budget-usd'), ['3']);
+  assert.equal(opts.env.GH_TOKEN, undefined);
+});
+
+test('runInvestigation: contact model and investigateEffort override the defaults', async () => {
+  const { args } = await investigationCall({ ...contact, model: 'sonnet', effort: 'low', investigateEffort: 'max' });
+  assert.deepEqual(after(args, '--model'), ['sonnet']);
+  assert.deepEqual(after(args, '--effort'), ['max']);
+});
+
+test('runInvestigation rejects for a tenant without infra; the reply run never gets the infra server', async () => {
+  await assert.rejects(investigationCall(contact, KNOWLEDGE), /infra/);
+  const withInfra = { ...KNOWLEDGE, tenants: { demo: { ...KNOWLEDGE.tenants.demo, infra: INFRA } } };
+  const { spawn, calls } = fakeSpawn(RESULT('REPLY:\nhola'));
+  await createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge: withInfra, spawn, readFile }).runReply({ contact, transcript: [], health: [] });
+  assert.ok(!('infra' in mcpServersOf(calls[0].args)));
+  assert.ok(!after(calls[0].args, '--settings')[0].includes('mcp__infra__'));
+});

@@ -71,7 +71,7 @@ function fakeCore(over = {}) {
   };
 }
 
-function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = [], dir = mkdtempSync(join(tmpdir(), 'wa-bridge-')), topics, topicLines, archiveRun, memoryChats = [], links = [], tracer, notify, runLog, actions, feedback, learner, contacts: cs = contacts, groups = {}, portalLink, requests, stageLock, seenChats = createSeenChats({ file: join(dir, 'seen-chats.json') }) } = {}) {
+function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = [], dir = mkdtempSync(join(tmpdir(), 'wa-bridge-')), topics, topicLines, archiveRun, memoryChats = [], links = [], tracer, notify, runLog, actions, feedback, learner, contacts: cs = contacts, groups = {}, portalLink, requests, stageLock, seenChats = createSeenChats({ file: join(dir, 'seen-chats.json') }), investigation, hasInfra, preflight = async () => ({}) } = {}) {
   const log = [];
   const logs = [];
   const alerts = [];
@@ -99,7 +99,7 @@ function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = 
     sendSticker: async (jid, buffer) => { log.push(['sticker', jid, buffer]); return `B${++sent}`; },
     fetchGroups: async () => { if (groups instanceof Error) throw groups; return groups; },
   };
-  const calls = { reply: [], job: [], jobSim: [], recall: [], archive: [] };
+  const calls = { reply: [], job: [], jobSim: [], recall: [], archive: [], investigation: [] };
   const realTopics = topics ?? createTopics({ profile: PROFILE, file: ':memory:', now: () => t });
   topics = { ...realTopics, recall: (q) => { calls.recall.push(q); return topicLines ?? realTopics.recall(q); } };
   const agent = {
@@ -112,6 +112,11 @@ function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = 
     runJob: (arg) => { calls.job.push(arg); return typeof job === 'function' ? job(arg) : Promise.resolve(JSON.stringify(job)); },
     runJobSim: async (arg) => { calls.jobSim.push(arg); return typeof jobSim === 'function' ? jobSim(arg) : jobSim; },
     snapshotRepos: async () => snaps.shift() ?? [],
+    runInvestigation: async (arg) => {
+      calls.investigation.push(arg);
+      const r = await (typeof investigation === 'function' ? investigation(arg) : investigation);
+      return { result: typeof r === 'string' ? r : JSON.stringify(r ?? { bubbles: ['borrador'], handoff: null, implement: null }), costUsd: 0.5, calls: [] };
+    },
   };
   const c = fakeCore(core);
   const store = createStore(dir, { initialState: c.initialState });
@@ -120,7 +125,7 @@ function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = 
   const leaks = createSecretGuard({ readFile: () => `//npm.pkg.github.com/:_authToken=${NPM_TOKEN}\n`, secrets: [PORTAL_TOKEN] });
   const archiver = createArchivist({ profile: PROFILE, topics, run: archiveRun ?? (async () => ({ text: '{"ops":[]}', costUsd: 0.001 })), leaks, now: () => t });
   const archivist = { archive: (a) => { calls.archive.push(a); return archiver.archive(a); } };
-  const make = () => createBridge({ profile: PROFILE, workspace: { root: ROOT }, wa, store, agent, clock, contacts: cs, selfJid: SELF, core: c, health, leaks, topics, archivist, memoryChats: { list: () => memoryChats }, contactLinks: { list: () => links }, trace: tracer, notify: notify ?? ((a) => alerts.push(a)), runLog, actions, feedback, learner, portalLink, requests, stageLock, seenChats, log: (...a) => logs.push(a.join(' ')) });
+  const make = () => createBridge({ profile: PROFILE, workspace: { root: ROOT }, wa, store, agent, clock, contacts: cs, selfJid: SELF, core: c, health, leaks, topics, archivist, memoryChats: { list: () => memoryChats }, contactLinks: { list: () => links }, trace: tracer, notify: notify ?? ((a) => alerts.push(a)), runLog, actions, feedback, learner, portalLink, requests, stageLock, seenChats, hasInfra, preflight, log: (...a) => logs.push(a.join(' ')) });
   const bridge = make();
   let m = 0;
   const msg = (chatJid, text, extra = {}) =>
@@ -2355,4 +2360,151 @@ test('live: a Telegram chat is answered on its own tg: jid; its handoff and [des
   await d.msg(RAFA, 'oye');
   await d.advance(DELAY);
   assert.ok(d.toSelf().some((m) => m.startsWith('[descartado · TG] → Rafa:')), d.toSelf().join('\n'));
+});
+
+// --- investigations: a bug/outage handoff of an `investigate` contact launches a background run whose draft the owner approves ---
+
+const INV_CONTACTS = contacts.map((c) => (c.jid === BEA ? { ...c, investigate: true } : c));
+const BUG_REPLY = { bubbles: ['ahorita lo veo'], handoff: bugHandoff, implement: null };
+const INV_OUT = { bubbles: ['ya revisé', 'fue un corte'], handoff: { type: 'bug', blocking: false, fields: { summary: 'corte', evidence: 'pm2 reinició 16:31 (22:31 UTC)' } }, implement: null };
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+const investigating = (over = {}) => setup({ contacts: INV_CONTACTS, hasInfra: () => true, reply: BUG_REPLY, investigation: INV_OUT, ...over });
+async function triggered(s, text = 'no carga') {
+  await s.msg(BEA, text);
+  await s.advance(DELAY);
+  await settle();
+}
+const DRAFT_1 = ['BORRADOR 1 · Bea', 'ya revisé', 'fue un corte', 'Evidencia: pm2 reinició 16:31 (22:31 UTC)', 'Manda /investigar si 1 para enviarlo o /investigar no 1 para descartarlo.'].join('\n\n');
+const AWS_WAIT_1 = (line) => `INVESTIGACIÓN en espera · Bea: la sesión de AWS se venció o no responde (${line}). Corre \`aws login\` en la Mac y manda /investigar 1 para reintentar.`;
+
+for (const [why, over, n] of [
+  ['bug + investigate + tenant infra', {}, 1],
+  ['outage', { reply: { ...BUG_REPLY, handoff: { ...bugHandoff, type: 'outage' } } }, 1],
+  ['other handoff type', { reply: { ...BUG_REPLY, handoff: { ...bugHandoff, type: 'follow-up' } } }, 0],
+  ['no handoff', { reply: { bubbles: ['va'], handoff: null, implement: null } }, 0],
+  ['tenant without infra', { hasInfra: () => false }, 0],
+  ['contact without investigate', { contacts }, 0],
+  ['live mode', { state: { shadow: false } }, 1],
+]) {
+  test(`investigation trigger: ${why} -> ${n ? 'launched' : 'none'}`, async () => {
+    const s = investigating(over);
+    await triggered(s);
+    assert.equal(s.calls.investigation.length, n);
+  });
+}
+
+test('investigation: launched without blocking the reply, with the reply run\'s inputs; draft posted once it ends', async () => {
+  let release;
+  const s = investigating({ investigation: () => new Promise((r) => { release = r; }) });
+  await triggered(s);
+  assert.equal(s.calls.reply.length, 1);
+  assert.ok(s.toSelf()[0].startsWith('[sombra · WA] → Bea:'), 'the normal shadow draft went out first');
+  assert.equal(s.toSelf()[1], 'INVESTIGANDO 1 · Bea (no carga el boton). Lo ves en vivo con: tail -f ~/Library/Logs/wha-me.log | grep "investiga Bea"');
+  const [arg] = s.calls.investigation;
+  assert.equal(arg.contact.name, 'Bea');
+  assert.deepEqual(arg.handoff, bugHandoff);
+  assert.deepEqual(arg.transcript.map((e) => e.text), ['no carga']);
+  assert.deepEqual(arg.health, HEALTH);
+  assert.ok(Array.isArray(arg.topics));
+  assert.equal(typeof arg.onEvent, 'function');
+  assert.equal(s.toSelf().length, 2);
+  release(INV_OUT);
+  await settle();
+  assert.equal(s.toSelf().at(-1), DRAFT_1);
+  assert.deepEqual(s.toContact(BEA), []);
+});
+
+test('investigation: one per chat; a second trigger while it runs is ignored with a log line', async () => {
+  const s = investigating({ investigation: () => new Promise(() => {}) });
+  await triggered(s);
+  await triggered(s, 'sigue sin cargar');
+  assert.equal(s.calls.reply.length, 2);
+  assert.equal(s.calls.investigation.length, 1);
+  assert.ok(s.logs.some((l) => /Bea.*investigación 1 en curso/.test(l)));
+});
+
+test('investigation: AWS preflight failure waits (message + notify); /investigar <n> retries and drafts', async () => {
+  let expired = true;
+  const s = investigating({ preflight: async () => { if (expired) throw new Error('Token has expired\nrun aws login'); } });
+  await triggered(s);
+  assert.equal(s.calls.investigation.length, 0);
+  assert.equal(s.toSelf().at(-1), AWS_WAIT_1('Token has expired'));
+  assert.deepEqual(s.alerts.at(-1), { title: 'wha-me', message: 'AWS vencido: investigación en espera', key: 'investigation-aws' });
+  await self(s, '/investigar');
+  assert.equal(s.toSelf().at(-1), 'investigaciones abiertas:\n1 · Bea · esperando AWS');
+  expired = false;
+  await self(s, '/investigar 1');
+  await settle();
+  assert.equal(s.calls.investigation.length, 1);
+  assert.match(s.toSelf().at(-2), /^INVESTIGANDO 1 · Bea/);
+  assert.equal(s.toSelf().at(-1), DRAFT_1);
+});
+
+test('investigation: CREDENCIAL_VENCIDA in the run\'s handoff -> the same wait message', async () => {
+  const s = investigating({ investigation: { bubbles: [], handoff: { type: 'credentials', blocking: true, fields: { evidence: 'CREDENCIAL_VENCIDA: ExpiredToken' } }, implement: null } });
+  await triggered(s);
+  assert.equal(s.toSelf().at(-1), AWS_WAIT_1('CREDENCIAL_VENCIDA: ExpiredToken'));
+  assert.equal(s.alerts.at(-1).key, 'investigation-aws');
+});
+
+test('investigation: no bubbles -> no draft, the evidence is shown', async () => {
+  const s = investigating({ investigation: { ...INV_OUT, bubbles: [] } });
+  await triggered(s);
+  assert.equal(s.toSelf().at(-1), 'INVESTIGACIÓN 1 · Bea: sin borrador.\nEvidencia: pm2 reinició 16:31 (22:31 UTC)');
+});
+
+test('investigation: a crashed run -> failure message; /investigar lists it; retry runs again', async () => {
+  let fail = true;
+  const s = investigating({ investigation: async () => { if (fail) throw new Error('claude timed out'); return INV_OUT; } });
+  await triggered(s);
+  assert.equal(s.toSelf().at(-1), 'INVESTIGACIÓN 1 falló · Bea: claude timed out. Manda /investigar 1 para reintentar.');
+  await self(s, '/investigar');
+  assert.equal(s.toSelf().at(-1), 'investigaciones abiertas:\n1 · Bea · falló');
+  fail = false;
+  await self(s, '/investigar 1');
+  await settle();
+  assert.equal(s.toSelf().at(-1), DRAFT_1);
+});
+
+test('/investigar si <n>: sends the draft to the contact even in shadow, as bot bubbles; then it is closed', async () => {
+  const s = investigating();
+  await triggered(s);
+  await self(s, '/investigar si 1');
+  assert.deepEqual(s.toContact(BEA), ['ya revisé', 'fue un corte']);
+  assert.equal(s.toSelf().at(-1), 'enviado');
+  assert.deepEqual(s.store.getTranscript(BEA).filter((e) => e.bot).map((e) => e.text), ['ya revisé', 'fue un corte']);
+  await self(s, '/investigar si 1');
+  assert.match(s.toSelf().at(-1), /no hay investigación 1/);
+  assert.equal(s.toContact(BEA).length, 2);
+});
+
+test('/investigar no <n>: discards the draft, nothing sent', async () => {
+  const s = investigating();
+  await triggered(s);
+  await self(s, '/investigar no 1');
+  assert.match(s.toSelf().at(-1), /descart/);
+  await self(s, '/investigar');
+  assert.equal(s.toSelf().at(-1), 'no hay investigaciones abiertas');
+  assert.deepEqual(s.toContact(BEA), []);
+});
+
+test('/investigar si <n> while paused: refused, nothing sent', async () => {
+  const s = investigating();
+  await triggered(s);
+  await self(s, '/pausa');
+  await self(s, '/investigar si 1');
+  assert.match(s.toSelf().at(-1), /pausa/);
+  assert.deepEqual(s.toContact(BEA), []);
+});
+
+test('/investigar: unknown number, a draft retried, bad arguments', async () => {
+  const s = investigating();
+  await triggered(s);
+  await self(s, '/investigar si 9');
+  assert.match(s.toSelf().at(-1), /no hay investigación 9/);
+  await self(s, '/investigar 1');
+  assert.match(s.toSelf().at(-1), /investigación 1 .*borrador/);
+  await self(s, '/investigar quizas');
+  assert.match(s.toSelf().at(-1), /\/investigar si <n>/);
+  assert.equal(s.calls.investigation.length, 1);
 });

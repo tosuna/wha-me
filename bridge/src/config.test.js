@@ -144,6 +144,7 @@ test('loadConfig: the example has one labelled tenant without tools, one placeho
 
 test('loadConfig: rejects invalid knowledge and migration fields with the field name', async () => {
   const tenant = { mcpServers: { db: { command: '/bin/db', args: [] } }, allowedTools: ['mcp__db__q'], replyHints: ['hint'] };
+  const infra = { region: 'xx-test-1', instanceId: 'i-0000example', pm2User: 'deploy', pm2Services: ['web'], nginxLog: '/var/log/x.log', wafAcl: 'acl', wafRules: [] };
   const cases = [
     ['knowledge', { tenants: undefined }, /knowledge\.tenants/],
     ['knowledge', { tenants: { demo: { ...tenant, mcpServers: { db: { args: [] } } } } }, /knowledge\.tenants\.demo\.mcpServers\.db/],
@@ -156,12 +157,18 @@ test('loadConfig: rejects invalid knowledge and migration fields with the field 
     ['pipeline', { repos: { "we'b": { github: 'acme/web', prodBranch: 'main', deploy: { stage: false } } } }, /pipeline\.repos\.we'b/],
     ['knowledge', { healthUrls: { pages: ['ftp://x'], apis: [] } }, /knowledge\.healthUrls/],
     ['knowledge', { healthUrls: { pages: [] } }, /knowledge\.healthUrls/],
+    ['knowledge', { tenants: { demo: { ...tenant, infra: 'x' } } }, /knowledge\.tenants\.demo\.infra/],
+    ['knowledge', { tenants: { demo: { ...tenant, infra: { ...infra, instanceId: '' } } } }, /knowledge\.tenants\.demo\.infra/],
+    ['knowledge', { tenants: { demo: { ...tenant, infra: { ...infra, pm2Services: 'web' } } } }, /knowledge\.tenants\.demo\.infra/],
+    ['knowledge', { tenants: { demo: { ...tenant, infra: { ...infra, wafRules: [1] } } } }, /knowledge\.tenants\.demo\.infra/],
     ['pipeline', { migrations: undefined }, /pipeline\.migrations/],
     ['pipeline', { migrations: { planRules: [] } }, /pipeline\.migrations/],
   ];
   for (const [section, patch, re] of cases) await assert.rejects(loadConfig(await withPatch(section, patch)), re, `${section} ${JSON.stringify(patch)}`);
   const ok = await loadConfig(await withPatch('knowledge', { tenants: { demo: tenant } }));
   assert.deepEqual(ok.knowledge.tenants.demo, tenant);
+  const withInfra = await loadConfig(await withPatch('knowledge', { tenants: { demo: { ...tenant, infra } } }));
+  assert.deepEqual(withInfra.knowledge.tenants.demo.infra, infra);
 });
 
 test('loadConfig: a module without knowledge is rejected', async () => {
@@ -223,7 +230,7 @@ test('loadConfig: rejects invalid profile.context, pipeline.playbook and workspa
 test('validateContacts: persona must be an existing file (absolute or repo-relative), model a non-empty string, anyHour and live booleans', () => {
   const persona = join(dir, 'persona.md');
   writeFileSync(persona, 'You are Robin.');
-  const ok = [{ jid: 'a@s.whatsapp.net', name: 'A' }, { jid: 'g@g.us', name: 'G', type: 'group', persona, model: 'claude-haiku-5-5', effort: 'medium', anyHour: true, live: true }];
+  const ok = [{ jid: 'a@s.whatsapp.net', name: 'A' }, { jid: 'g@g.us', name: 'G', type: 'group', persona, model: 'claude-haiku-5-5', effort: 'medium', anyHour: true, live: true, investigate: true, investigateEffort: 'max' }];
   assert.equal(validateContacts(ok), ok);
   assert.doesNotThrow(() => validateContacts([{ jid: 'b', name: 'B', persona: 'config/example.config.js' }]));
   for (const [bad, field] of [
@@ -234,5 +241,7 @@ test('validateContacts: persona must be an existing file (absolute or repo-relat
     [{ effort: 'mid' }, /G\.effort/],
     [{ anyHour: 'yes' }, /G\.anyHour/],
     [{ live: 1 }, /G\.live/],
+    [{ investigate: 'yes' }, /G\.investigate/],
+    [{ investigateEffort: 'huge' }, /G\.investigateEffort/],
   ]) assert.throws(() => validateContacts([{ jid: 'g@g.us', name: 'G', ...bad }]), field);
 });

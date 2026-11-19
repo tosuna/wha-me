@@ -190,6 +190,7 @@ bridge = createBridge({
   notify: notifier.alert, runLog, actions,
   feedback, learner: createLearner({ profile, feedback, agent, healthUrls: knowledge.healthUrls, tenants: knowledge.tenants, repoDir: dirname(BRIDGE), proposalsDir: join(stateDir, 'proposals'), leaks }),
   portalLink: () => loginLink(stateDir), requests, stageLock,
+  hasInfra: (c) => Object.hasOwn(knowledge.tenants, c.tenant ?? '') && !!knowledge.tenants[c.tenant].infra,
 });
 const steps = {
   ...DEFAULT_STEPS, plan: createPlanStep({ profile, workspace, pipeline: pipelineConfig, runStep: agent.runStep, prodCode, requests }),

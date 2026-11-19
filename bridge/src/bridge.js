@@ -4,6 +4,7 @@ import { linkGroupOf } from './contact-links.js';
 import { isPersona, lookupContact, respondToOf } from './core/allowlist.js';
 import { CHANNEL_LABEL, channelOf } from './core/channel.js';
 import { noFeedback } from './feedback.js';
+import { createInvestigations } from './investigations.js';
 import { noRequests } from './requests.js';
 import { noRunLog } from './run-log.js';
 import { createSim } from './sim.js';
@@ -126,6 +127,7 @@ const SECRET_ALERT = 'ALERT · outbound message blocked: it matched a secret pat
 // requests: Peticiones store (see requests.js); a feature-request handoff creates or merges one. No-op by default.
 // portalLink: () => the portal login link (carries the portal token) or null without a tunnel; for the /portal command.
 // stageLock(fn): mutex shared with the Peticiones pipeline (pipeline.js), so a job and a request never push stage together.
+// hasInfra(contact): its tenant has knowledge.tenants.<t>.infra (investigations.js); preflight: the AWS credential check.
 // log: short console lines (group silences, unknown group members).
 // profile: the owner (config profile): tag is the persisted author of the owner's messages, tag.toLowerCase() their person key.
 // workspace: config workspace (its root is trimmed from /simular trace paths).
@@ -133,6 +135,7 @@ export function createBridge({
   profile, workspace, wa, store, agent, clock, contacts, selfJid, core, health, leaks, topics, archivist, memoryChats = { list: () => [] }, contactLinks = { list: () => [] }, seenChats = { record() {} }, trace = createConsoleTrace({ log: () => {} }), notify = () => {}, runLog = noRunLog,
   actions = noActions(), feedback = noFeedback,
   learner = { handle: async () => 'aprendizaje no configurado' }, portalLink = () => null, requests = noRequests, stageLock = (fn) => fn(), log = console.log,
+  hasInfra = () => false, preflight,
 }) {
   const OWNER = profile.tag;
   const ownerKey = OWNER.toLowerCase();
@@ -165,6 +168,10 @@ export function createBridge({
   const sim = createSim({
     profile, contacts, agent, health, parse: (text) => core.parseAgentOutput(text, { idPattern: actions.idPattern }), parseJob: core.parseJobOutput, say, recall: (c, text) => recallTopics(c.jid, c.name, text), trace, runLog,
     now: () => clock.now().getTime(), isLocked: () => store.getState().locked, root: workspace?.root,
+  });
+  const investigations = createInvestigations({
+    agent, parse: (text) => core.parseAgentOutput(text, { idPattern: actions.idPattern }), say, notify, trace, runLog,
+    send: (jid, bubbles) => sendBubbles(jid, bubbles), paused: () => !!store.getState().paused, hasInfra, preflight, log,
   });
   const contactOf = (jid) => core.lookupContact(contacts, jid);
   const memoryChatOf = (jid) => (contactOf(jid) ? null : core.lookupContact(memoryChats.list(), jid)); // contacts.json wins
@@ -307,6 +314,10 @@ export function createBridge({
       const text = msg.text.trim();
       if (/^\/simular(\s|$)/i.test(text)) return sim.start(text.slice('/simular'.length).trim());
       if (/^\/aprender(\s|$)/i.test(text)) return say(await learner.handle(text.slice('/aprender'.length).trim().toLowerCase(), say));
+      if (/^\/investigar(\s|$)/i.test(text)) {
+        const r = await investigations.handle(text.slice('/investigar'.length).trim().toLowerCase());
+        return r && say(r);
+      }
       if (/^\/grupos$/i.test(text)) return say(await wa.fetchGroups().then(fmtGroups, (e) => `ERROR /grupos: ${e.message}`));
       // The one self-chat post exempt from the secret guard: the login link carries the portal token on purpose.
       if (/^\/portal$/i.test(text)) {
@@ -432,17 +443,19 @@ export function createBridge({
     let t;
     let run;
     let transcript;
+    let results;
+    let recalled;
     let label = contact.name;
     busy.add(jid);
     try {
-      const results = persona ? [] : await health(); // a persona run gets no health, topics or work data
+      results = persona ? [] : await health(); // a persona run gets no health, topics or work data
       transcript = store.getTranscript(jid); // read after the health check, as before: it can take seconds
       const asking = group ? (e) => e.respondTo : (e) => e.author === 'CONTACTO';
       const inbound = transcript.slice(transcript.findLastIndex((e) => !asking(e)) + 1).map((e) => e.text);
       if (group) label = `${contact.name} (grupo, responde a ${transcript.findLast(asking)?.author ?? '?'})`;
       t = trace.turn({ mode: 'real', contact, jid, inbound });
       run = runLog.start({ kind: 'reply', mode: 'real', contact, jid });
-      const recalled = persona ? [] : recallTopics(jid, group ? transcript.findLast(asking)?.author : contact.name, inbound.join('\n'));
+      recalled = persona ? [] : recallTopics(jid, group ? transcript.findLast(asking)?.author : contact.name, inbound.join('\n'));
       t.memory(recalled);
       t.health(results);
       const onEvent = (e) => { t.event(e); run.event(e); };
@@ -477,6 +490,7 @@ export function createBridge({
     }
     run.finish({ result: raw, decision: out, outcome });
     feedbackOf(jid).draft({ runId: run.id, jid, contact, out, outcome, transcript });
+    investigations.maybeStart({ jid, contact, handoff: out.handoff, transcript, health: results, topics: recalled });
   }
 
   // What happens to a parsed reply; resolves its run-log outcome.

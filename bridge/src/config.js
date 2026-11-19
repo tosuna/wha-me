@@ -115,13 +115,20 @@ function validateKnowledge(k, fail, text) {
     for (const [name, s] of Object.entries(t.mcpServers)) if (!text(s?.command) || !Array.isArray(s.args)) fail(`${at}.mcpServers.${name}`, 'must have a command and an args list');
     if (!texts(t.allowedTools)) fail(`${at}.allowedTools`, 'must be a list of tool names');
     if (!texts(t.replyHints)) fail(`${at}.replyHints`, 'must be a list of prompt lines');
+    // Optional: production infra the investigation runs may read (infra-mcp.js).
+    const i = t.infra;
+    if (i !== undefined && (!i || typeof i !== 'object' || !['instanceId', 'region', 'pm2User', 'nginxLog', 'wafAcl'].every((f) => text(i[f]))
+      || !texts(i.pm2Services) || !texts(i.wafRules))) {
+      fail(`${at}.infra`, 'must be { instanceId, region, pm2User, nginxLog, wafAcl, pm2Services: [name], wafRules: [name] }');
+    }
   }
   const urls = (v) => Array.isArray(v) && v.every((u) => /^https?:\/\/\S+$/.test(u ?? ''));
   if (!urls(k.healthUrls?.pages) || !urls(k.healthUrls?.apis)) fail('knowledge.healthUrls', 'must be { pages: [http(s) URL], apis: [http(s) URL] }');
 }
 
 // contacts.json optional per-contact fields (index.js checks them at startup): persona = markdown file, absolute or relative
-// to the repo root, that must exist; model = Claude model id for that contact's reply runs; anyHour = ignore profile.hours; live = answer for real even in shadow mode.
+// to the repo root, that must exist; model = Claude model id for that contact's reply runs; anyHour = ignore profile.hours; live = answer for real even in shadow mode;
+// investigate = a bug/outage handoff launches an investigation run (bridge.js); investigateEffort = its --effort.
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']; // claude --effort
 export function validateContacts(contacts) {
   for (const c of contacts) {
@@ -132,6 +139,8 @@ export function validateContacts(contacts) {
     if (c.effort !== undefined && !EFFORTS.includes(c.effort)) fail('effort', `must be one of ${EFFORTS.join(', ')}`);
     if (c.anyHour !== undefined && typeof c.anyHour !== 'boolean') fail('anyHour', 'must be true or false');
     if (c.live !== undefined && typeof c.live !== 'boolean') fail('live', 'must be true or false');
+    if (c.investigate !== undefined && typeof c.investigate !== 'boolean') fail('investigate', 'must be true or false');
+    if (c.investigateEffort !== undefined && !EFFORTS.includes(c.investigateEffort)) fail('investigateEffort', `must be one of ${EFFORTS.join(', ')}`);
   }
   return contacts;
 }
