@@ -148,6 +148,8 @@ export function createLearner({
   const pendingFile = join(proposalsDir, 'pending.json');
   const pending = () => (existsSync(pendingFile) ? JSON.parse(readFileSync(pendingFile, 'utf8')) : null);
   const git = async (...args) => (await execFile('git', ['-C', repoDir, ...args])).stdout.trim();
+  // The skill may live in its own repo nested in repoDir (e.g. private/, which the outer repo ignores): commit and push there.
+  const skillGit = async (...args) => (await execFile('git', ['-C', join(repoDir, SKILL), ...args])).stdout.trim();
   const stat = (files) => files.map((f) => `${f.path} +${f.added} -${f.removed}`).join('\n');
 
   async function propose(say) {
@@ -203,11 +205,11 @@ export function createLearner({
     if (sha256(text) !== p.sha256) return 'rechazada: el diff cambió desde que te lo mostré. Nada aplicado; manda /aprender no y /aprender otra vez';
     const { files, error } = checkPatch(text, SKILL_FILES);
     if (error) return `rechazada: ${error}. Nada aplicado; /aprender no para descartarla`;
-    const paths = files.map((f) => f.path);
+    const paths = files.map((f) => relative(SKILL, f.path));
     try {
-      const branch = await git('rev-parse', '--abbrev-ref', 'HEAD');
+      const branch = await skillGit('rev-parse', '--abbrev-ref', 'HEAD');
       if (branch !== 'main') return `no apliqué: el repo está en ${branch}, no en main`;
-      const dirty = await git('status', '--porcelain', '--', ...paths);
+      const dirty = await skillGit('status', '--porcelain', '--', ...paths);
       if (dirty) return `no apliqué: hay cambios sin commit en la skill:\n${dirty}`;
       await git('apply', '--check', '--recount', file);
     } catch (e) {
@@ -218,14 +220,14 @@ export function createLearner({
     if (sha256(readFileSync(file, 'utf8')) !== p.sha256) return 'rechazada: el diff cambió durante la evaluación. Nada aplicado; manda /aprender no y /aprender otra vez';
     try {
       await git('apply', '--recount', file);
-      await git('commit', '-m', `feat(skill): learn from shadow feedback (${p.pairIds.length} pairs)`, '--', ...paths);
+      await skillGit('commit', '-m', `feat(skill): learn from shadow feedback (${p.pairIds.length} pairs)`, '--', ...paths);
     } catch (e) {
       return `no apliqué la propuesta: ${e.message}`;
     }
-    const commit = await git('rev-parse', '--short', 'HEAD').catch(() => '?');
+    const commit = await skillGit('rev-parse', '--short', 'HEAD').catch(() => '?');
     feedback.markReviewed(p.pairIds);
     rmSync(pendingFile);
-    const pushed = await git('push', 'origin', 'main').then(() => 'subido a main', (e) => `commit local, el push falló: ${e.message}`);
+    const pushed = await skillGit('push', 'origin', 'main').then(() => 'subido a main', (e) => `commit local, el push falló: ${e.message}`);
     return `listo, aprendí de ${p.pairIds.length} pares: commit ${commit} (${pushed})\n${stat(files)}\n${verdict.text}`;
   }
 

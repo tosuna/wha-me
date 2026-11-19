@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,8 +43,9 @@ function setup({ pairs = PAIRS, output = `SUMMARY:\n${SUMMARY}\n${EVIDENCE}DIFF:
   const tmpCalls = [];
   const execFile = async (cmd, args) => {
     assert.equal(cmd, 'git');
-    if (args[1] !== repoDir) return tmpCalls.push(args) && { stdout: '', stderr: '' }; // the proposal applied to the eval's temp skill copy
-    assert.deepEqual(args.slice(0, 2), ['-C', repoDir]);
+    // repoDir applies the patch; the skill dir commits and pushes (it may be its own repo); anything else is the eval's temp skill copy.
+    if (args[1] !== repoDir && args[1] !== join(repoDir, skillPaths(profile.skill).dir)) return tmpCalls.push(args) && { stdout: '', stderr: '' };
+    assert.equal(args[0], '-C');
     gitCalls.push(args.slice(2));
     const key = Object.keys(replies).find((k) => args.slice(2).join(' ').startsWith(k));
     const r = key === undefined ? '' : replies[key];
@@ -78,7 +80,7 @@ test('/aprender uses the configured skill: its name, SKILL.md and learnable file
   assert.ok(checkPatch(patch(VOICE), skillPaths(skill).files).error, 'the default skill files are not editable');
   await s.handle('si');
   assert.ok(s.evalRuns[0].proposedDir.endsWith('owner/my-skill'));
-  assert.ok(s.gitCalls.some((c) => c[0] === 'commit' && c.at(-1) === style));
+  assert.ok(s.gitCalls.some((c) => c[0] === 'commit' && c.at(-1) === 'notes/style.md'));
 });
 
 for (const [name, diff] of [
@@ -141,10 +143,10 @@ test('/aprender si applies, commits only the skill files, pushes main and marks 
   assert.ok(diffFile.endsWith('.diff'));
   assert.deepEqual(s.gitCalls, [
     ['rev-parse', '--abbrev-ref', 'HEAD'],
-    ['status', '--porcelain', '--', VOICE],
+    ['status', '--porcelain', '--', 'references/voice.md'],
     ['apply', '--check', '--recount', diffFile],
     ['apply', '--recount', diffFile],
-    ['commit', '-m', 'feat(skill): learn from shadow feedback (3 pairs)', '--', VOICE],
+    ['commit', '-m', 'feat(skill): learn from shadow feedback (3 pairs)', '--', 'references/voice.md'],
     ['rev-parse', '--short', 'HEAD'],
     ['push', 'origin', 'main'],
   ]);
@@ -279,4 +281,46 @@ test('/aprender si: a diff changed while the eval ran is refused (hash re-checke
   s.onEval(() => writeFileSync(join(s.proposalsDir, pending.diff), GOOD.replace('+nuevo', '+otra cosa')));
   assert.match(await s.handle('si'), /cambió/);
   assert.ok(!s.gitCalls.some((c) => (c[0] === 'apply' && c[1] !== '--check') || c[0] === 'commit'));
+});
+
+test('/aprender si commits and pushes in the repo that owns the skill, even a nested one the outer repo ignores (real git)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wa-learn-nested-'));
+  const sh = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' }).toString().trim();
+  const id = ['-c', 'user.name=t', '-c', 'user.email=t@t'];
+  const outer = join(dir, 'outer');
+  const remote = join(dir, 'private.git');
+  const skill = { dir: 'private/skills/owner', name: 'owner', learnable: ['references/voice.md', 'references/contacts.md'] };
+  const inner = join(outer, 'private');
+  sh(dir, 'init', '-q', '--bare', '-b', 'main', remote);
+  sh(dir, 'init', '-q', '-b', 'main', outer);
+  writeFileSync(join(outer, '.gitignore'), 'private/\n');
+  sh(outer, ...id, 'add', '.gitignore');
+  sh(outer, ...id, 'commit', '-qm', 'outer');
+  sh(dir, 'init', '-q', '-b', 'main', inner);
+  for (const f of skillPaths(skill).context) {
+    mkdirSync(join(outer, f, '..'), { recursive: true });
+    writeFileSync(join(outer, f), 'viejo\n');
+  }
+  sh(inner, ...id, 'add', '.');
+  sh(inner, ...id, 'commit', '-qm', 'skill');
+  sh(inner, 'remote', 'add', 'origin', remote);
+  sh(inner, 'push', '-q', 'origin', 'main');
+  const voice = 'private/skills/owner/references/voice.md';
+  const pairs = PAIRS;
+  const reviewed = [];
+  const feedback = { list: ({ unreviewed }) => (unreviewed ? pairs.filter((p) => !reviewed.includes(p.id)) : pairs), markReviewed: (ids) => reviewed.push(...ids) };
+  const agent = { runLearn: async () => `SUMMARY:\nx\n${EVIDENCE}DIFF:\n${patch(voice)}` };
+  const evaluator = { run: async () => ({ ok: true, text: 'evaluación ok' }) };
+  process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = 't';
+  process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = 't@t';
+  const learner = createLearner({ profile: { ...PROFILE, skill }, feedback, agent, repoDir: outer, proposalsDir: join(dir, 'proposals'), evaluator, leaks: () => false });
+  const say = async () => {};
+  await learner.handle('', say);
+  const reply = await learner.handle('si', say);
+  assert.match(reply, /listo, aprendí de 3 pares/, reply);
+  assert.match(reply, /subido a main/, reply);
+  assert.equal(readFileSync(join(outer, voice), 'utf8'), 'nuevo\n');
+  assert.equal(sh(inner, 'status', '--porcelain'), '', 'the change is committed, nothing left dirty');
+  assert.match(sh(remote, 'log', '-1', '--format=%s'), /learn from shadow feedback \(3 pairs\)/);
+  assert.deepEqual(reviewed, [3, 2, 1]);
 });
