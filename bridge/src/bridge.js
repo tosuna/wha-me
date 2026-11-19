@@ -19,7 +19,7 @@ export const ARCHIVE_BATCH = 60;
 const SHADOW_EVENT = '(sombra: borrador no enviado) ';
 
 // A name identifies a contacts.json person only within its channel: WhatsApp keys stay the bare contactKey (the memory
-// predates Telegram), Telegram ones are prefixed, so a WhatsApp and a Telegram "Carlos" never meet by name.
+// predates Telegram), Telegram ones are prefixed, so a WhatsApp and a Telegram "Rafa" never meet by name.
 const nameKey = (jid, name) => (channelOf(jid) === 'telegram' ? `tg:${contactKey(name)}` : contactKey(name));
 const opaqueOf = (jid) => opaqueKey(jid, channelOf(jid) === 'telegram' ? 'tg' : 'wa');
 const isPerson = (contacts, jid) => !!lookupContact(contacts, jid) && lookupContact(contacts, jid).type !== 'group';
@@ -86,7 +86,7 @@ const fmtHandoffEvent = (h, bubbles, shadow) => `handoff ${h.type}: ${h.fields?.
 
 const fmtImplement = (i) => `IMPLEMENT: ${i.summary}\nspec:\n${i.spec}`;
 
-// tag: 'sombra' | 'descartado' -> "[sombra · TG] → Carlos:".
+// tag: 'sombra' | 'descartado' -> "[sombra · TG] → Rafa:".
 const fmtDraft = (tag, jid, contact, { bubbles, handoff, implement }) =>
   [
     `[${tag} · ${via(jid)}] → ${contact.name}:`,

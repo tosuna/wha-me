@@ -195,7 +195,7 @@ export function knownChats({ contacts, memory, seen }) {
   return all.map((c) => ({ ...c, channel: channelOf(c.jid), label: CHANNEL_LABEL[channelOf(c.jid)] }));
 }
 
-// Same or prefix name once normalized ("Carlos" ~ "Carlos Pérez"): a hint, never identity.
+// Same or prefix name once normalized ("Rafa" ~ "Rafa Pérez"): a hint, never identity.
 const alike = (a, b) => {
   const [x, y] = [contactKey(a ?? ''), contactKey(b ?? '')];
   return !!x && !!y && (x === y || x.startsWith(`${y}-`) || y.startsWith(`${x}-`));

@@ -142,7 +142,7 @@ export function createTopics({ profile, file, now = Date.now }) {
       return e && typeof e.person === 'string' && e.person ? e : null;
     };
     // add_participant target: a person of the batch by key, or a known person by key or by name. A name that fits more than
-    // one person (two unlinked "Carlos" on different channels) is nobody: guessing would join the wrong person's memory.
+    // one person (two unlinked "Rafa" on different channels) is nobody: guessing would join the wrong person's memory.
     const personFor = (p) => {
       const s = String(p ?? '');
       if (batch.has(s)) return s;

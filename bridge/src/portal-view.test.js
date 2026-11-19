@@ -254,18 +254,18 @@ test('channel: each chat says WhatsApp or Telegram; tg:-… ids are groups even 
 test('linkView: private chats by channel (first listing wins), links with their members, WA<->TG name matches only suggested', () => {
   const CWA = '5218111111111@s.whatsapp.net';
   const v = linkView({
-    contacts: [{ jid: CWA, name: 'Carlos' }, { jid: 'carlos@lid', name: 'Carlos' }, { jid: 'tg:1', name: 'Carlos Pérez' }, { jid: 'g@g.us', name: 'Obras', type: 'group' },
+    contacts: [{ jid: CWA, name: 'Rafa' }, { jid: 'rafa@lid', name: 'Rafa' }, { jid: 'tg:1', name: 'Rafa Pérez' }, { jid: 'g@g.us', name: 'Obras', type: 'group' },
       { jid: BEA, name: 'Bea' }, { jid: 'tg:2', name: 'Béa' }],
     memory: [{ jid: 'tg:3', name: 'Dalia', kind: 'private' }, { jid: 'tg:-100', name: 'Grupo TG', kind: 'group' }, { jid: CWA, name: 'dup', kind: 'private' }],
     seen: [{ jid: DALIA, name: 'Dalia', kind: 'private' }, { jid: 'tg:4', name: null, kind: 'private' }],
     links: [{ jids: [BEA, 'tg:2'] }],
   });
   assert.deepEqual(v.chats.map((c) => [c.jid, c.name, c.channel, c.label, c.source]), [
-    [CWA, 'Carlos', 'whatsapp', 'WA', 'contacts'], ['carlos@lid', 'Carlos', 'whatsapp', 'WA', 'contacts'], ['tg:1', 'Carlos Pérez', 'telegram', 'TG', 'contacts'],
+    [CWA, 'Rafa', 'whatsapp', 'WA', 'contacts'], ['rafa@lid', 'Rafa', 'whatsapp', 'WA', 'contacts'], ['tg:1', 'Rafa Pérez', 'telegram', 'TG', 'contacts'],
     [BEA, 'Bea', 'whatsapp', 'WA', 'contacts'], ['tg:2', 'Béa', 'telegram', 'TG', 'contacts'], ['tg:3', 'Dalia', 'telegram', 'TG', 'memory'],
     [DALIA, 'Dalia', 'whatsapp', 'WA', 'seen'], ['tg:4', null, 'telegram', 'TG', 'seen'],
   ]);
   assert.deepEqual(v.links.map((g) => g.members.map((m) => [m.jid, m.name, m.label])), [[[BEA, 'Bea', 'WA'], ['tg:2', 'Béa', 'TG']]]);
-  // Bea is already linked; the phone + LID Carlos is one suggestion; unnamed chats never match.
+  // Bea is already linked; the phone + LID Rafa is one suggestion; unnamed chats never match.
   assert.deepEqual(v.suggestions.map((x) => [x.a.jid, x.b.jid]), [[CWA, 'tg:1'], [DALIA, 'tg:3']]);
 });

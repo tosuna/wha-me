@@ -11,11 +11,11 @@ const doc = (mimeType, attributes, size = 1000) => new Api.MessageMediaDocument(
   document: new Api.Document({ id: big(1), accessHash: big(1), fileReference: Buffer.alloc(0), date: at, mimeType, size: big(size), dcId: 1, attributes }),
 });
 const photo = () => new Api.MessageMediaPhoto({});
-const CARLOS = new Api.User({ id: big(42), firstName: 'Carlos', lastName: 'Ruiz' });
+const RAFA = new Api.User({ id: big(42), firstName: 'Rafa', lastName: 'Ruiz' });
 
 test('private incoming: tg:<peerId> chat, unique id, ms timestamp, sender name, opaque key', () => {
-  assert.deepEqual(toBridgeMessage(msg({}), { sender: CARLOS }), {
-    id: 'tg:42:7', chatJid: 'tg:42', fromMe: false, text: 'hola', timestamp: at * 1000, pushName: 'Carlos Ruiz', key: { remoteJid: 'tg:42', id: 7 },
+  assert.deepEqual(toBridgeMessage(msg({}), { sender: RAFA }), {
+    id: 'tg:42:7', chatJid: 'tg:42', fromMe: false, text: 'hola', timestamp: at * 1000, pushName: 'Rafa Ruiz', key: { remoteJid: 'tg:42', id: 7 },
   });
 });
 
@@ -26,7 +26,7 @@ test("owner's own message from another device: fromMe true", () => {
 });
 
 test('group message: marked group id, participant tg:<userId>, quotable message', () => {
-  const m = toBridgeMessage(msg({ peerId: new Api.PeerChannel({ channelId: big(555) }), fromId: user(42) }), { sender: CARLOS });
+  const m = toBridgeMessage(msg({ peerId: new Api.PeerChannel({ channelId: big(555) }), fromId: user(42) }), { sender: RAFA });
   assert.equal(m.chatJid, 'tg:-100555');
   assert.equal(m.id, 'tg:-100555:7');
   assert.equal(m.participant, 'tg:42');
@@ -77,10 +77,10 @@ test('connectTg: emits normalized messages, incoming and the owner\'s own', asyn
   const tg = await connectTg({ client });
   const got = [];
   tg.onMessage((m) => got.push(m));
-  client.emit(Object.assign(msg({}), { getSender: async () => CARLOS }));
+  client.emit(Object.assign(msg({}), { getSender: async () => RAFA }));
   client.emit(msg({ id: 8, out: true, message: 'yo contesto' }));
   await flush();
-  assert.deepEqual(got.map((m) => [m.chatJid, m.fromMe, m.text, m.pushName]), [['tg:42', false, 'hola', 'Carlos Ruiz'], ['tg:42', true, 'yo contesto', null]]);
+  assert.deepEqual(got.map((m) => [m.chatJid, m.fromMe, m.text, m.pushName]), [['tg:42', false, 'hola', 'Rafa Ruiz'], ['tg:42', true, 'yo contesto', null]]);
 });
 
 test('connectTg: refuses a session that is not logged in', async () => {

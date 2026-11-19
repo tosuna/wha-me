@@ -1171,60 +1171,60 @@ test('archive identity from jids: a stranger with pushName Ciro is opaque, a con
   assert.deepEqual(s.calls.reply[0].topics, [], 'what the stranger said is never the real Ciro\'s');
 });
 
-// Two people called Carlos: one on WhatsApp (phone + LID, same name), one on Telegram.
-const CARLOS_WA = '5218111111111@s.whatsapp.net';
-const CARLOS_LID = '424242@lid';
-const CARLOS_TG = 'tg:123';
-const CARLOSES = [{ jid: CARLOS_WA, name: 'Carlos' }, { jid: CARLOS_LID, name: 'Carlos' }, { jid: CARLOS_TG, name: 'Carlos' }];
+// Two people called Rafa: one on WhatsApp (phone + LID, same name), one on Telegram.
+const RAFA_WA = '5218111111111@s.whatsapp.net';
+const RAFA_LID = '424242@lid';
+const RAFA_TG = 'tg:123';
+const RAFAS = [{ jid: RAFA_WA, name: 'Rafa' }, { jid: RAFA_LID, name: 'Rafa' }, { jid: RAFA_TG, name: 'Rafa' }];
 
 test('identity: an equal name merges only on the same channel; an explicit link makes one person under the WhatsApp key', () => {
-  assert.deepEqual(canonicalChat(CARLOS_LID, CARLOSES), { jid: CARLOS_WA, name: 'Carlos', kind: 'private' }, 'phone + LID still merge');
-  assert.deepEqual(canonicalChat(CARLOS_TG, CARLOSES), { jid: CARLOS_TG, name: 'Carlos', kind: 'private' });
-  assert.deepEqual([personKey(CARLOS_WA, CARLOSES), personKey(CARLOS_LID, CARLOSES), personKey(CARLOS_TG, CARLOSES)], ['carlos', 'carlos', 'tg:carlos']);
-  assert.match(personKey('tg:777', CARLOSES), /^tg:[0-9a-f]{10}$/, 'an unlisted Telegram id is opaque');
-  assert.deepEqual(knownPeopleOf(CARLOSES), [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'tg:carlos' }]);
+  assert.deepEqual(canonicalChat(RAFA_LID, RAFAS), { jid: RAFA_WA, name: 'Rafa', kind: 'private' }, 'phone + LID still merge');
+  assert.deepEqual(canonicalChat(RAFA_TG, RAFAS), { jid: RAFA_TG, name: 'Rafa', kind: 'private' });
+  assert.deepEqual([personKey(RAFA_WA, RAFAS), personKey(RAFA_LID, RAFAS), personKey(RAFA_TG, RAFAS)], ['rafa', 'rafa', 'tg:rafa']);
+  assert.match(personKey('tg:777', RAFAS), /^tg:[0-9a-f]{10}$/, 'an unlisted Telegram id is opaque');
+  assert.deepEqual(knownPeopleOf(RAFAS), [{ name: 'Rafa', key: 'rafa' }, { name: 'Rafa', key: 'tg:rafa' }]);
   // Linked (Telegram listed first): the WhatsApp contacts.json member gives the key and the canonical chat.
-  const links = [{ jids: [CARLOS_TG, CARLOS_LID] }];
-  assert.deepEqual(canonicalChat(CARLOS_TG, CARLOSES, [], links), { jid: CARLOS_WA, name: 'Carlos', kind: 'private' });
-  assert.equal(personKey(CARLOS_TG, CARLOSES, links), 'carlos');
-  assert.deepEqual(knownPeopleOf(CARLOSES, [], links), [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'carlos' }]);
+  const links = [{ jids: [RAFA_TG, RAFA_LID] }];
+  assert.deepEqual(canonicalChat(RAFA_TG, RAFAS, [], links), { jid: RAFA_WA, name: 'Rafa', kind: 'private' });
+  assert.equal(personKey(RAFA_TG, RAFAS, links), 'rafa');
+  assert.deepEqual(knownPeopleOf(RAFAS, [], links), [{ name: 'Rafa', key: 'rafa' }, { name: 'Rafa', key: 'rafa' }]);
   // A link without a WhatsApp contacts.json member: its first member's key.
   const memory = [{ jid: 'tg:9', name: 'Charly', kind: 'private' }];
-  assert.equal(personKey('seen@s.whatsapp.net', CARLOSES, [{ jids: ['tg:9', 'seen@s.whatsapp.net'] }]), personKey('tg:9', CARLOSES));
-  assert.equal(canonicalChat('tg:9', CARLOSES, memory, [{ jids: ['tg:9', CARLOS_TG] }]).jid, CARLOS_TG, 'contacts.json before memory-only');
+  assert.equal(personKey('seen@s.whatsapp.net', RAFAS, [{ jids: ['tg:9', 'seen@s.whatsapp.net'] }]), personKey('tg:9', RAFAS));
+  assert.equal(canonicalChat('tg:9', RAFAS, memory, [{ jids: ['tg:9', RAFA_TG] }]).jid, RAFA_TG, 'contacts.json before memory-only');
 });
 
-test('two unlinked Carloses (WhatsApp, Telegram) stay two people in archive and recall; linked they share one; unlinked again they split', async () => {
+test('two unlinked Rafas (WhatsApp, Telegram) stay two people in archive and recall; linked they share one; unlinked again they split', async () => {
   const links = [];
-  const s = setup({ contacts: [...contacts, ...CARLOSES], links });
-  await s.msg(CARLOS_LID, 'mando las sedes de Monterrey');
-  await s.msg(CARLOS_TG, 'mando el oficio de Saltillo');
+  const s = setup({ contacts: [...contacts, ...RAFAS], links });
+  await s.msg(RAFA_LID, 'mando las sedes del norte');
+  await s.msg(RAFA_TG, 'mando el oficio de Saltillo');
   await s.advance(DELAY);
-  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid]), [['carlos', CARLOS_WA], ['tg:carlos', CARLOS_TG]]);
+  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid]), [['rafa', RAFA_WA], ['tg:rafa', RAFA_TG]]);
   await s.advance(ARCHIVE_QUIET_MS);
   const byChat = (calls) => Object.fromEntries(calls.map((a) => [a.chat.jid, a.entries.filter((e) => e.author === 'CONTACTO').map((e) => [e.person, e.text])]));
   assert.deepEqual(byChat(s.calls.archive), {
-    [CARLOS_WA]: [['carlos', 'mando las sedes de Monterrey']], [CARLOS_TG]: [['tg:carlos', 'mando el oficio de Saltillo']],
+    [RAFA_WA]: [['rafa', 'mando las sedes del norte']], [RAFA_TG]: [['tg:rafa', 'mando el oficio de Saltillo']],
   });
-  const known = s.calls.archive[0].knownPeople.filter((p) => p.name === 'Carlos');
-  assert.deepEqual(known, [{ name: 'Carlos', key: 'carlos' }, { name: 'Carlos', key: 'tg:carlos' }]);
+  const known = s.calls.archive[0].knownPeople.filter((p) => p.name === 'Rafa');
+  assert.deepEqual(known, [{ name: 'Rafa', key: 'rafa' }, { name: 'Rafa', key: 'tg:rafa' }]);
 
-  links.push({ jids: [CARLOS_WA, CARLOS_TG] }); // linked in the portal: read live, no restart
+  links.push({ jids: [RAFA_WA, RAFA_TG] }); // linked in the portal: read live, no restart
   s.calls.archive.length = 0;
   s.calls.recall.length = 0;
-  await s.msg(CARLOS_TG, 'ya llegó el oficio');
+  await s.msg(RAFA_TG, 'ya llegó el oficio');
   await s.advance(DELAY);
-  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid]), [['carlos', CARLOS_WA]]);
+  assert.deepEqual(s.calls.recall.map((q) => [q.person, q.chat.jid]), [['rafa', RAFA_WA]]);
   await s.advance(ARCHIVE_QUIET_MS);
-  assert.deepEqual(byChat(s.calls.archive), { [CARLOS_WA]: [['carlos', 'ya llegó el oficio']] }, 'both jids feed the WhatsApp chat');
+  assert.deepEqual(byChat(s.calls.archive), { [RAFA_WA]: [['rafa', 'ya llegó el oficio']] }, 'both jids feed the WhatsApp chat');
 
   links.length = 0; // unlinked
   s.calls.archive.length = 0;
-  await s.msg(CARLOS_TG, 'otra cosa');
+  await s.msg(RAFA_TG, 'otra cosa');
   await s.advance(DELAY + ARCHIVE_QUIET_MS);
   // The Telegram chat catches up from its own cursor: what was said while linked is archived again under its own person
   // (what the shared person already holds stays there; see the portal's unlink warning).
-  assert.deepEqual(byChat(s.calls.archive), { [CARLOS_TG]: [['tg:carlos', 'ya llegó el oficio'], ['tg:carlos', 'otra cosa']] });
+  assert.deepEqual(byChat(s.calls.archive), { [RAFA_TG]: [['tg:rafa', 'ya llegó el oficio'], ['tg:rafa', 'otra cosa']] });
 });
 
 test('a memory-only chat named like a contacts.json contact is not that contact: own chat key, opaque person', async () => {
@@ -2330,29 +2330,29 @@ test('live: hours apply again unless anyHour', async () => {
 
 // --- channel labels: every self-chat line about a chat says where it comes from (WA / TG) ---
 
-const CARLOS = 'tg:42';
-const withCarlos = [...contacts, { jid: CARLOS, name: 'Carlos', register: 'tu', tenant: 'demo', canTriggerImplementation: false }];
+const RAFA = 'tg:42';
+const withRafa = [...contacts, { jid: RAFA, name: 'Rafa', register: 'tu', tenant: 'demo', canTriggerImplementation: false }];
 const bugReply = { bubbles: ['va'], handoff: { type: 'bug', blocking: false, fields: { summary: 'no carga' }, raw: '' }, implement: null };
 
 test('shadow drafts and handoffs name the channel: [sombra · TG] for Telegram, [sombra · WA] for WhatsApp', async () => {
-  const s = setup({ contacts: withCarlos, reply: bugReply });
-  await s.msg(CARLOS, 'oye');
+  const s = setup({ contacts: withRafa, reply: bugReply });
+  await s.msg(RAFA, 'oye');
   await s.msg(BEA, 'oye');
   await s.advance(DELAY);
   const self = s.toSelf();
-  assert.ok(self.some((m) => m.startsWith('[sombra · TG] → Carlos:') && m.includes('HANDOFF · TG · Carlos')), self.join('\n'));
+  assert.ok(self.some((m) => m.startsWith('[sombra · TG] → Rafa:') && m.includes('HANDOFF · TG · Rafa')), self.join('\n'));
   assert.ok(self.some((m) => m.startsWith('[sombra · WA] → Bea:') && m.includes('HANDOFF · WA · Bea')), self.join('\n'));
 });
 
 test('live: a Telegram chat is answered on its own tg: jid; its handoff and [descartado] say TG', async () => {
-  const s = setup({ contacts: withCarlos, state: { shadow: false }, reply: bugReply });
-  await s.msg(CARLOS, 'oye');
+  const s = setup({ contacts: withRafa, state: { shadow: false }, reply: bugReply });
+  await s.msg(RAFA, 'oye');
   await s.advance(DELAY);
-  assert.deepEqual(s.toContact(CARLOS), ['va']);
-  assert.ok(s.toSelf().some((m) => m.startsWith('HANDOFF · TG · Carlos')), s.toSelf().join('\n'));
+  assert.deepEqual(s.toContact(RAFA), ['va']);
+  assert.ok(s.toSelf().some((m) => m.startsWith('HANDOFF · TG · Rafa')), s.toSelf().join('\n'));
   let d;
-  d = setup({ contacts: withCarlos, state: { shadow: false }, reply: () => { d.store.setState({ ...d.store.getState(), paused: true }); return bugReply; } });
-  await d.msg(CARLOS, 'oye');
+  d = setup({ contacts: withRafa, state: { shadow: false }, reply: () => { d.store.setState({ ...d.store.getState(), paused: true }); return bugReply; } });
+  await d.msg(RAFA, 'oye');
   await d.advance(DELAY);
-  assert.ok(d.toSelf().some((m) => m.startsWith('[descartado · TG] → Carlos:')), d.toSelf().join('\n'));
+  assert.ok(d.toSelf().some((m) => m.startsWith('[descartado · TG] → Rafa:')), d.toSelf().join('\n'));
 });

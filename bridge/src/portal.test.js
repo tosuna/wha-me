@@ -677,10 +677,10 @@ test('memory chats: feeding + recent lists; Alimentar memoria moves a seen chat 
   assert.equal((await postJson('/api/memory/chats/remove', { jid: MO })).status, 404);
 });
 
-test('Enlazar contactos: a WA and a TG Carlos are only a suggestion; link / unlink persist to contact-links.json; refusals are 400', async (t) => {
+test('Enlazar contactos: a WA and a TG Rafa are only a suggestion; link / unlink persist to contact-links.json; refusals are 400', async (t) => {
   const { getJson, postJson, stateDir } = await setupMemory(t);
   const CWA = '5218111111111@s.whatsapp.net';
-  writeFileSync(join(dirname(stateDir), 'contacts.json'), JSON.stringify([{ jid: BEA, name: 'Bea' }, { jid: CWA, name: 'Carlos' }, { jid: 'tg:123', name: 'Carlos' }, { jid: 'g@g.us', name: 'Obras', type: 'group' }]));
+  writeFileSync(join(dirname(stateDir), 'contacts.json'), JSON.stringify([{ jid: BEA, name: 'Bea' }, { jid: CWA, name: 'Rafa' }, { jid: 'tg:123', name: 'Rafa' }, { jid: 'g@g.us', name: 'Obras', type: 'group' }]));
   const file = join(stateDir, 'contact-links.json');
   let v = (await getJson('/api/links')).body;
   assert.deepEqual(v.links, []);
@@ -697,7 +697,7 @@ test('Enlazar contactos: a WA and a TG Carlos are only a suggestion; link / unli
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), [{ jids: [CWA, 'tg:123'] }]);
   assert.equal((await postJson('/api/links/link', { a: NEW, b: 'tg:123' })).status, 400, 'tg:123 is already linked');
   v = (await getJson('/api/links')).body;
-  assert.deepEqual([v.links.map((g) => g.members.map((m) => m.name)), v.suggestions], [[['Carlos', 'Carlos']], []]);
+  assert.deepEqual([v.links.map((g) => g.members.map((m) => m.name)), v.suggestions], [[['Rafa', 'Rafa']], []]);
   assert.equal((await postJson('/api/links/unlink', { jid: 'tg:123' })).status, 200);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), []);
   assert.equal((await postJson('/api/links/unlink', { jid: 'tg:123' })).status, 404);

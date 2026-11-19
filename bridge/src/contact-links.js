@@ -8,7 +8,7 @@ const normalize = (jid) => String(jid).replace(/:\d+@/, '@');
 export const linkGroupOf = (groups, jid) => groups.find((g) => g.jids.some((j) => normalize(j) === normalize(jid))) ?? null;
 
 // Explicit identity across channels: [{ jids: [...] }], each group ONE person, a jid in at most one group. Names never link
-// anyone: a WhatsApp and a Telegram "Carlos" stay two people until the owner links them in the portal. Read fresh on every
+// anyone: a WhatsApp and a Telegram "Rafa" stay two people until the owner links them in the portal. Read fresh on every
 // use (like memory-chats.json), so a portal edit reaches the bridge without a restart. Errors are UI text (portal 400s).
 export function createContactLinks({ file, log = console.error }) {
   function list() {

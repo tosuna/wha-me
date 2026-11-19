@@ -121,7 +121,7 @@ An array of chats (see `bridge/contacts.example.json`):
 - `effort` (optional): `low`, `medium`, `high`, `xhigh` or `max`, passed as `--effort` to this contact's reply runs.
 
 The same name merges entries only within one channel (a phone jid and a LID listed with the same name are one person).
-A WhatsApp and a Telegram contact are never merged by name: two people called Carlos stay two people in the topic
+A WhatsApp and a Telegram contact are never merged by name: two people called Rafa stay two people in the topic
 memory. When they really are the same person, link their chats in the portal (Memoria → Enlazar contactos, saved to
 `bridge/state/contact-links.json` and read live); chats with alike names are only suggested, never linked for you.
 A link shares the memory under the WhatsApp contact's identity; unlinking splits what comes next, not what was stored.
@@ -134,7 +134,7 @@ A link shares the memory under the WhatsApp contact's identity; unlinking splits
 
 Optional second channel, on your own Telegram account (a userbot over MTProto, not a bot). Telegram chats get the same
 allowlist, gates, shadow mode and handoffs as WhatsApp; the self-chat (drafts, handoffs, commands) stays on WhatsApp, and
-every line there says which channel the chat is on (`[sombra · TG] → Carlos:`, `HANDOFF · WA · Bea`). Stickers are not
+every line there says which channel the chat is on (`[sombra · TG] → Rafa:`, `HANDOFF · WA · Bea`). Stickers are not
 sent on Telegram; voice notes are transcribed and photos described like on WhatsApp; other files stay placeholders.
 
 1. Create an API id and hash at https://my.telegram.org (API development tools) and export `TG_API_ID` and `TG_API_HASH`
