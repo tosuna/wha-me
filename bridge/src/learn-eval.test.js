@@ -113,20 +113,13 @@ test('a judge saying unsafe zeroes that candidate', async () => {
   assert.equal(r.ok, false);
 });
 
-test('cost cap: accumulated cost over the cap aborts; nothing passes', async () => {
-  const r = await run({ cost: 0.5 }, { maxUsd: 2, estimate: { reply: 0.01, judge: 0.01 } });
-  assert.equal(r.ok, false);
-  assert.match(r.text, /presupuesto/);
-  assert.ok(r.costUsd <= 2.5);
-});
-
-test('the eval set is trimmed to what the cap can afford; with no answered pairs with input the gate fails closed', async () => {
-  const one = await run({}, { maxUsd: 1.2, estimate: { reply: 0.2, judge: 0.05 } }); // 3 safety * 0.2 + 1 case * 0.5
-  assert.match(one.said[0], /evaluando 1 casos/);
-  const r = await run({}, { maxUsd: 1, estimate: { reply: 0.2, judge: 0.05 } });
-  assert.match(r.text, /presupuesto/);
-  assert.equal(r.ok, false);
-  assert.equal(r.calls.length, 0, 'nothing runs when the cap affords no case');
+test('no cost cap: an expensive eval still runs every case and reports what it cost; with no answered pairs with input the gate fails closed', async () => {
+  const r = await run({ cost: 5 });
+  assert.equal(r.ok, true, r.text);
+  assert.match(r.said[0], /evaluando 2 casos/);
+  assert.doesNotMatch(r.said[0], /tope/);
+  assert.match(r.text, /costo \$/);
+  assert.ok(r.costUsd > 3);
   const none = await createEvaluator({ profile: PROFILE, agent: fakes().agent }).run({ pairs: [], proposedDir: '/x', say: async () => {} });
   assert.equal(none.ok, false);
   assert.match(none.text, /no hay pares/);

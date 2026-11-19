@@ -6,11 +6,7 @@ import { jaccard, normalize } from './feedback.js';
 // current skill and with the proposed one, scores each reply against what the owner really sent (token overlap + an LLM judge),
 // and requires every fixed attack case to stay safe under the proposed skill. Offline: health all up, no topics.
 export const EVAL_CASES = 12;
-export const MAX_EVAL_USD = Number(process.env.LEARN_EVAL_MAX_USD) || 3;
 export const TOLERANCE = 0.05;
-// Per-call cost estimates used to trim the eval set to the cap (real reply runs cost $0.14-0.29).
-// Measured 2026-10-15: reply runs $0.09–0.16, judge ~$0.03.
-const ESTIMATE = { reply: 0.15, judge: 0.03 };
 const ANSWERED = new Set(['verbatim', 'edited', 'rewritten']);
 // The fixed attack cases (learn-eval-safety.json) for this owner: __OWNER_NAME__ / __OWNER_KEY__ (profile name, tag lowercased)
 // in the attack texts and __TENANT__ as every case's contact tenant. The config keeps them JSON-safe (no quotes or backslashes).
@@ -74,22 +70,17 @@ const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
 // run() never throws: { ok, text (Spanish, for the self-chat), costUsd }.
 // profile: the owner (judge prompt wording, attack texts); healthUrls: config knowledge.healthUrls (replayed as all up);
 // tenants: config knowledge.tenants: the attack cases run as the first one, with its tools (none configured: a tenant without).
-export function createEvaluator({ profile, agent, healthUrls = { pages: [], apis: [] }, tenants = {}, maxUsd = MAX_EVAL_USD, n = EVAL_CASES, estimate = ESTIMATE }) {
+export function createEvaluator({ profile, agent, healthUrls = { pages: [], apis: [] }, tenants = {}, n = EVAL_CASES }) {
   const SAFETY_CASES = safetyCases(profile, Object.keys(tenants)[0] ?? 'demo');
   async function run({ pairs, proposedDir, say }) {
     const fail = (text, costUsd = 0) => ({ ok: false, text: `${text}\nNada aplicado; la propuesta sigue pendiente (/aprender no para descartarla).`, costUsd });
-    const all = evalSet(pairs, n);
-    if (!all.length) return fail('no apliqué: no hay pares con contexto (lo que vio el agente) en los que hayas contestado; no hay con qué evaluar.');
-    const perCase = 2 * (estimate.reply + estimate.judge);
-    const safetyUsd = SAFETY_CASES.length * estimate.reply;
-    const cases = all.slice(0, Math.max(0, Math.floor((maxUsd - safetyUsd) / perCase + 1e-9)));
-    if (!cases.length) return fail(`no apliqué: el presupuesto de ${usd(maxUsd)} no alcanza para evaluar ni un caso.`);
-    await say(`evaluando ${cases.length} casos + ${SAFETY_CASES.length} de seguridad (~${usd(cases.length * perCase + safetyUsd)}, tope ${usd(maxUsd)}); tarda unos minutos…`);
+    const cases = evalSet(pairs, n);
+    if (!cases.length) return fail('no apliqué: no hay pares con contexto (lo que vio el agente) en los que hayas contestado; no hay con qué evaluar.');
+    await say(`evaluando ${cases.length} casos + ${SAFETY_CASES.length} de seguridad; tarda unos minutos…`);
 
     let cost = 0;
     const spend = (t) => {
       cost += t.costUsd ?? 0;
-      if (cost > maxUsd) throw new Error(`presupuesto excedido (${usd(cost)} > tope ${usd(maxUsd)})`);
       return t;
     };
     // Unparseable reply -> 0 without judging; a judge marking it unsafe -> 0.
