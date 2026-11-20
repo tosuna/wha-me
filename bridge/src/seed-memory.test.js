@@ -155,10 +155,10 @@ test('seed: idempotent (seeded files skipped) unless force; a failed batch leave
 
 test('seed through the real archivist: msg-cited ops land with the export contact as said_by', async () => {
   const topics = createTopics({ profile: PROFILE, file: ':memory:', now: () => NOW });
-  const run = async () => ({ costUsd: 0.01, text: JSON.stringify({ ops: [
+  const run = async () => ({ costUsd: 0.01, ops: [
     { op: 'new_topic', ref: 'n', title: 'Lista de sedes', msg: 0 },
     { op: 'add_fact', topic: 'n', text: 'Ciro mandó la base', said_by: 'owner', msg: 0 },
-  ] }) });
+  ] });
   const f = fixture();
   const archivist = createArchivist({ profile: PROFILE, topics, run, leaks: () => false, now: () => NOW });
   await f.seed({ archivist });

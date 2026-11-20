@@ -38,7 +38,7 @@ const prompt = ({ profile, chat, entries, knownPeople, visible }) => [
   ...entries.map((e, i) => JSON.stringify({ msg: i, by: e.person, name: stripTags(e.name || e.author), at: iso(e.at), text: stripTags(e.text) })),
   '</messages>',
   '',
-  'Output only JSON, no prose or fences: {"ops": [...]}, at most 40 ops, [] if nothing is worth keeping.',
+  'Return {"ops": [...]}: at most 40 ops, [] if nothing is worth keeping.',
   'Every op cites in "msg" the number of the message it comes from; who said it and when come from that message, not from you.',
   'Ops:',
   '{"op":"new_topic","ref":"n1","title":"...","msg":<n>} (later ops in this answer may use "topic":"n1")',
@@ -47,12 +47,22 @@ const prompt = ({ profile, chat, entries, knownPeople, visible }) => [
   '{"op":"close_topic","topic":<id>,"msg":<n>} / {"op":"reopen_topic","topic":<id>,"msg":<n>}',
 ].join('\n');
 
-// First {...} block of the model text (tolerates fences or stray prose).
-const parseOps = (text) => {
-  const s = String(text ?? '');
-  const ops = JSON.parse(s.slice(s.indexOf('{'), s.lastIndexOf('}') + 1))?.ops;
-  if (!Array.isArray(ops)) throw new Error('no ops array');
-  return ops;
+// --json-schema: the CLI validates the answer and returns it as structured_output.
+const OPS_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['ops'],
+  properties: {
+    ops: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false, required: ['op', 'msg'],
+        properties: {
+          op: { enum: ['new_topic', 'add_fact', 'add_participant', 'close_topic', 'reopen_topic'] },
+          ref: { type: 'string' }, title: { type: 'string' }, topic: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+          text: { type: 'string' }, person: { type: 'string' }, msg: { type: 'integer' },
+        },
+      },
+    },
+  },
 };
 
 export function createArchivist({ profile, topics, run, leaks, now = Date.now }) {
@@ -63,7 +73,8 @@ export function createArchivist({ profile, topics, run, leaks, now = Date.now })
     let ops;
     try {
       out = await run(prompt({ profile, chat, entries, knownPeople, visible: topics.visibleTopics({ chat, entries }) }));
-      ops = parseOps(out.text);
+      ops = out.ops;
+      if (!Array.isArray(ops)) throw new Error('no ops array');
     } catch (e) {
       return { applied: 0, rejected: [], costUsd: out?.costUsd ?? 0, error: e.message };
     }
@@ -81,7 +92,8 @@ export function claudeRunner({ spawn = nodeSpawn, bin = 'claude', cwd = ARCHIVIS
     const { GH_TOKEN, GITHUB_TOKEN, ...env } = process.env;
     const args = [
       '-p', text, '--output-format', 'json', '--model', 'haiku', '--restricted', '--strict-mcp-config',
-      '--mcp-config', JSON.stringify({ mcpServers: {} }), '--no-session-persistence', '--tools', '', // variadic: keep last
+      '--mcp-config', JSON.stringify({ mcpServers: {} }), '--no-session-persistence',
+      '--json-schema', JSON.stringify(OPS_SCHEMA), '--tools', '', // variadic: keep last
     ];
     const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -96,7 +108,7 @@ export function claudeRunner({ spawn = nodeSpawn, bin = 'claude', cwd = ARCHIVIS
       try {
         const r = JSON.parse(out);
         if (r.is_error) throw new Error(`claude error: ${String(r.result).slice(0, 500)}`);
-        resolve({ text: r.result, usage: usageOf(r.usage), costUsd: r.total_cost_usd });
+        resolve({ ops: r.structured_output?.ops, usage: usageOf(r.usage), costUsd: r.total_cost_usd });
       } catch (e) {
         reject(e);
       }

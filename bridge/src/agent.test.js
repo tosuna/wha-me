@@ -579,11 +579,11 @@ test('runReplyTrace with skillDir (the /aprender eval): that dir replaces the sk
   assert.ok(!current.join(' ').includes('wa-learn-eval'));
 });
 
-test('runJudge: restricted, no MCP servers, no tools, no GH_TOKEN; resolves result + cost', async () => {
-  const { spawn, calls } = fakeSpawn(JSON.stringify({ type: 'result', is_error: false, result: '{"facts":2}', total_cost_usd: 0.01 }));
+test('runJudge: restricted, no MCP servers, no tools, no GH_TOKEN, --json-schema; resolves the structured verdict + cost', async () => {
+  const { spawn, calls } = fakeSpawn(JSON.stringify({ type: 'result', is_error: false, result: '', structured_output: { facts: 2 }, total_cost_usd: 0.01 }));
   process.env.GH_TOKEN = 'LEAK_ME';
   try {
-    assert.deepEqual(await createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge: KNOWLEDGE, spawn, readFile }).runJudge({ prompt: 'J' }), { result: '{"facts":2}', costUsd: 0.01 });
+    assert.deepEqual(await createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge: KNOWLEDGE, spawn, readFile }).runJudge({ prompt: 'J', schema: { type: 'object' } }), { structured: { facts: 2 }, costUsd: 0.01 });
   } finally {
     delete process.env.GH_TOKEN;
   }
@@ -592,6 +592,7 @@ test('runJudge: restricted, no MCP servers, no tools, no GH_TOKEN; resolves resu
   for (const f of ['--restricted', '--strict-mcp-config']) assert.ok(args.includes(f), f);
   assert.deepEqual(JSON.parse(after(args, '--mcp-config')[0]), { mcpServers: {} });
   assert.deepEqual(after(args, '--tools'), ['']);
+  assert.deepEqual(JSON.parse(after(args, '--json-schema')[0]), { type: 'object' });
   assert.ok(!args.includes('--add-dir'));
   assert.equal(opts.env.GH_TOKEN, undefined);
 });
@@ -669,6 +670,12 @@ test('runStep: sandboxed like runJobSim, max budget, new session id, extra args 
   assert.equal(opts.signal, signal);
   for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY']) assert.equal(opts.env[k], undefined, k);
   assert.ok(opts.env.PATH);
+});
+
+test('runStep: schema -> --json-schema; the trace carries structured_output as structured', async () => {
+  const { args } = await stepCall({ sessionId: 'aaaa-1', schema: { type: 'object' } });
+  assert.deepEqual(JSON.parse(after(args, '--json-schema')[0]), { type: 'object' });
+  assert.deepEqual(parseStreamJson(JSON.stringify({ type: 'result', result: 'x', structured_output: { clash: false } })).structured, { clash: false });
 });
 
 test('runStep: --resume instead of --session-id; default cwd is the workspace root', async () => {

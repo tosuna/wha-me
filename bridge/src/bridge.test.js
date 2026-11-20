@@ -123,7 +123,7 @@ function setup({ core = {}, state = {}, reply, job, trace = [], jobSim, snaps = 
   store.setState({ ...c.initialState(), ...state });
   const health = async () => HEALTH;
   const leaks = createSecretGuard({ readFile: () => `//npm.pkg.github.com/:_authToken=${NPM_TOKEN}\n`, secrets: [PORTAL_TOKEN] });
-  const archiver = createArchivist({ profile: PROFILE, topics, run: archiveRun ?? (async () => ({ text: '{"ops":[]}', costUsd: 0.001 })), leaks, now: () => t });
+  const archiver = createArchivist({ profile: PROFILE, topics, run: archiveRun ?? (async () => ({ ops: [], costUsd: 0.001 })), leaks, now: () => t });
   const archivist = { archive: (a) => { calls.archive.push(a); return archiver.archive(a); } };
   const make = () => createBridge({ profile: PROFILE, workspace: { root: ROOT }, wa, store, agent, clock, contacts: cs, selfJid: SELF, core: c, health, leaks, topics, archivist, memoryChats: { list: () => memoryChats }, contactLinks: { list: () => links }, trace: tracer, notify: notify ?? ((a) => alerts.push(a)), runLog, actions, feedback, learner, portalLink, requests, stageLock, seenChats, hasInfra, preflight, log: (...a) => logs.push(a.join(' ')) });
   const bridge = make();
@@ -972,7 +972,7 @@ const TOPICS = [{
 }];
 const bugHandoff = { type: 'bug', blocking: false, fields: { summary: 'no carga el boton' }, raw: '' };
 const DAY = 24 * 60 * 60 * 1000;
-const opsRun = (ops) => async () => ({ text: JSON.stringify({ ops }), costUsd: 0.002 });
+const opsRun = (ops) => async () => ({ ops, costUsd: 0.002 });
 // Texts of the bridge events handed to the archivist once the chat goes quiet.
 async function bridgeEvents(s) {
   await s.advance(ARCHIVE_QUIET_MS);
@@ -1010,11 +1010,11 @@ test('Ciro: a file sent in private is understood with the topic Alex opened in t
   let n = 0;
   const archiveRun = async () => ({
     costUsd: 0.002,
-    text: JSON.stringify({ ops: n++ ? [] : [
+    ops: n++ ? [] : [
       { op: 'new_topic', ref: 'n1', title: TITLE, msg: 1 },
       { op: 'add_fact', topic: 'n1', text: 'Ciro dice que el formulario 312 ya quedó publicado', msg: 0 },
       { op: 'add_fact', topic: 'n1', text: 'Alex pidió a Ciro el Excel de la lista de sedes con código de sede', msg: 1 },
-    ] }),
+    ],
   });
   const ciro = { jid: CIRO, name: 'Ciro', register: 'tu', tenant: 'demo2', canTriggerImplementation: false };
   const s = groupSetup({ contacts: [...contacts, GROUP, ciro], archiveRun });
@@ -1072,7 +1072,7 @@ test('archive: cursor kept on failure, advanced on success, logged as kind archi
       return { id: runs.length, event: (e) => r.events.push(e), finish: () => { r.end = 'ok'; }, fail: () => { r.end = 'error'; } };
     },
   };
-  const archiveRun = async () => { if (fail) throw new Error('haiku down'); return { text: '{"ops":[]}', costUsd: 0.003 }; };
+  const archiveRun = async () => { if (fail) throw new Error('haiku down'); return { ops: [], costUsd: 0.003 }; };
   const s = setup({ archiveRun, runLog });
   const texts = (a) => a.entries.map((e) => e.text);
   await s.msg(BEA, 'uno');
@@ -1154,10 +1154,10 @@ test('archive identity from jids: a stranger with pushName Ciro is opaque, a con
   const CIRO = 'ciro@s.whatsapp.net';
   const ciro = { jid: CIRO, name: 'Ciro', register: 'tu', tenant: 'demo2', canTriggerImplementation: false };
   let n = 0;
-  const archiveRun = async () => ({ costUsd: 0.002, text: JSON.stringify({ ops: n++ ? [] : [
+  const archiveRun = async () => ({ costUsd: 0.002, ops: n++ ? [] : [
     { op: 'new_topic', ref: 'n1', title: 'Lista de sedes 312', msg: 0 },
     { op: 'add_fact', topic: 'n1', text: 'Ciro dice que la lista de sedes 312 está lista', said_by: 'ciro', msg: 0 },
-  ] }) });
+  ] });
   const s = groupSetup({ contacts: [...contacts, GROUP, ciro], archiveRun });
   await s.gmsg(['fake@lid'], 'la lista de sedes 312 está lista', { pushName: 'Ciro' });
   await s.gmsg([BEA], 'yo la reviso', { pushName: 'Pau' });

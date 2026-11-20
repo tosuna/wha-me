@@ -43,7 +43,7 @@ async function archivistPrompt({ profile }) {
   let prompt;
   const archivist = createArchivist({
     profile, topics: { visibleTopics: () => [], apply: () => ({ applied: 0, rejected: [] }) }, leaks: () => false, now: () => 0,
-    run: async (p) => { prompt = p; return { text: '{"ops":[]}', costUsd: 0 }; },
+    run: async (p) => { prompt = p; return { ops: [], costUsd: 0 }; },
   });
   const key = profile.tag.toLowerCase();
   await archivist.archive({ chat: { jid: 'c@s', name: 'C', kind: 'private' }, entries: [{ author: profile.tag, name: key, person: key, text: 'x', at: 0 }], knownPeople: [] });
