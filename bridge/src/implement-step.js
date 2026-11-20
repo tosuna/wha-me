@@ -79,6 +79,7 @@ function implementPrompt(request, evidence, plan, blocks, dir, exists, root, pro
     '',
     'Delegate each block to the `implementer` subagent (Agent tool, subagent_type "implementer"), passing its spec file content verbatim as the prompt.',
     'Independent blocks may run in parallel; a block starts only after every block it depends on finished.',
+    'Run every implementer in the foreground (never run_in_background) and never schedule a wakeup or later work: this is a one-shot run, and the step ends when your answer ends.',
     "Write each block's `## Report` block, verbatim from its implementer, to that block's Report path above.",
     'Do NOT commit, push, merge, cherry-pick or deploy, and do not create worktrees or branches: the bridge commits each worktree after you finish.',
     '',

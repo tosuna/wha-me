@@ -235,3 +235,11 @@ test('implement step: resume with committed clean trees -> no second commit, no 
   await late.run();
   assert.equal(late.calls.gate.length, 0);
 });
+
+test('implement step: implementers run in the foreground and nothing is scheduled; the step ends with its answer', async () => {
+  const s = setup();
+  await s.run();
+  const [a] = s.calls.runStep;
+  assert.match(a.prompt, /never run_in_background/);
+  assert.match(a.prompt, /never schedule/i);
+});

@@ -53,6 +53,11 @@ const replyArgs = (workspace, tenant, skillDir) => [
   '--thinking-display', 'summarized',
 ];
 
+// Jobs and pipeline steps skip the owner's user settings (their hooks, personal agents and plugins) but keep the
+// workspace project config (its CLAUDE.md, the implementer/reviewer agents) and the --settings below. Verified on claude 2.1.329:
+// --settings still applies; ~/.claude/CLAUDE.md still loads (only --bare drops it, and --bare needs an API key).
+const OWN_SETTINGS_ONLY = ['--setting-sources', 'project,local'];
+
 // /simular job: the real job run inside the OS sandbox (https://code.claude.com/docs/en/sandboxing). Verified live
 // on claude 2.1.288: curl/git to github.com, cat ~/.npmrc and touch ~/x are blocked, also when the model retries with
 // dangerouslyDisableSandbox. The sandbox covers Bash only, so the permission rules cover Read/Edit/Write/WebFetch.
@@ -68,7 +73,8 @@ export const SIM_JOB_SETTINGS = {
   },
   permissions: {
     deny: [
-      'WebFetch', 'WebSearch', `Read(/${HOME}/.npmrc)`, `Read(/${HOME}/.ssh/**)`, `Read(/${HOME}/.aws/**)`,
+      // One-shot runs: nothing may be scheduled for after the run has ended (an implement step once did, and stalled).
+      'WebFetch', 'WebSearch', 'ScheduleWakeup', 'CronCreate', `Read(/${HOME}/.npmrc)`, `Read(/${HOME}/.ssh/**)`, `Read(/${HOME}/.aws/**)`,
       `Read(/${HOME}/.config/gh/**)`, `Edit(/${HOME}/.*/**)`, `Write(/${HOME}/.*/**)`,
       // File tools run outside the sandbox: block planting hooks/settings/MCP config that would run unsandboxed.
       ...['Edit', 'Write'].flatMap((t) => ['//**/.claude/**', '//**/.mcp.json', '//**/.git/hooks/**', '//**/.git/config'].map((p) => `${t}(${p})`)),
@@ -415,13 +421,13 @@ export function createAgent({ profile, workspace, knowledge, spawn = nodeSpawn, 
       return run(prompt, args, INVESTIGATION_TIMEOUT, REPLY_CWD, env, replyOut(onEvent), signal);
     },
     runJob({ contact, implement, onEvent }) {
-      return run(jobPrompt(profile.skill.name, contact, implement, workspace.root), ['--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized'], JOB_TIMEOUT, workspace.root, { ...process.env, GH_TOKEN: ghToken() }, replyOut(onEvent))
+      return run(jobPrompt(profile.skill.name, contact, implement, workspace.root), ['--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized', ...OWN_SETTINGS_ONLY], JOB_TIMEOUT, workspace.root, { ...process.env, GH_TOKEN: ghToken() }, replyOut(onEvent))
         .then((t) => t.result);
     },
     // The real job run, sandboxed and without credentials; resolves the parsed trace (see parseStreamJson).
     runJobSim({ contact, implement, onCalls = () => {}, onEvent, signal }) {
       const env = strippedEnv();
-      const args = ['--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized', '--settings', JSON.stringify(SIM_JOB_SETTINGS), '--strict-mcp-config', '--mcp-config', codegraphMcp];
+      const args = ['--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized', ...OWN_SETTINGS_ONLY, '--settings', JSON.stringify(SIM_JOB_SETTINGS), '--strict-mcp-config', '--mcp-config', codegraphMcp];
       return run(`${SIM_JOB_PREAMBLE}\n\n${jobPrompt(profile.skill.name, contact, implement, workspace.root)}`, args, SIM_JOB_TIMEOUT, workspace.root, env, streamOut(onCalls, onEvent), signal);
     },
     // One Peticiones pipeline step (see pipeline.js): PIPELINE_SETTINGS sandbox, no credentials, CodeGraph only. sessionId starts
@@ -429,7 +435,7 @@ export function createAgent({ profile, workspace, knowledge, spawn = nodeSpawn, 
     // stricter variant of PIPELINE_SETTINGS (the read-only plan step). Resolves the trace.
     runStep({ prompt, args = [], schema, timeoutMs, budgetUsd, sessionId, resume, signal, onEvent, cwd = workspace.root, settings = PIPELINE_SETTINGS }) {
       const a = [
-        '--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized', '--settings', JSON.stringify(settings),
+        '--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized', ...OWN_SETTINGS_ONLY, '--settings', JSON.stringify(settings),
         '--strict-mcp-config', '--mcp-config', codegraphMcp, '--max-budget-usd', String(budgetUsd),
         ...(resume ? ['--resume', resume] : sessionId ? ['--session-id', sessionId] : []), ...(schema ? ['--json-schema', JSON.stringify(schema)] : []), ...args,
       ];

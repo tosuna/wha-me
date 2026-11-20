@@ -858,3 +858,15 @@ test('persona template defers the output format to the reply prompt (no "one mes
   assert.doesNotMatch(tpl, /nothing else/i);
   assert.match(tpl, /in the reply format given below/);
 });
+
+test('runJob, runJobSim and runStep skip the owner\'s user settings (hooks, personal agents, plugins): project and local only', async () => {
+  const { spawn, calls } = fakeSpawn(RESULT('RESULT: ok'));
+  await createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge: KNOWLEDGE, spawn, readFile }).runJob({ contact, implement: { summary: 'fix', spec: '## Goal\nfix it' } });
+  const { args: sim } = await jobSimCall();
+  const { args: step } = await stepCall();
+  for (const args of [calls[0].args, sim, step]) assert.deepEqual(after(args, '--setting-sources'), ['project,local']);
+});
+
+test('simulated-job and pipeline settings deny tools that schedule work after a one-shot run has ended', () => {
+  for (const s of [SIM_JOB_SETTINGS, PIPELINE_SETTINGS]) for (const t of ['ScheduleWakeup', 'CronCreate']) assert.ok(s.permissions.deny.includes(t), t);
+});
