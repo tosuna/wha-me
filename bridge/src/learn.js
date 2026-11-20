@@ -176,7 +176,7 @@ export const learnPrompt = (pairs, files, profile) => [
   '',
   'Answer strictly in this format, nothing else:',
   'SUMMARY:',
-  `<in ${languageName(profile.language)}, for ${profile.name}'s WhatsApp, at most ~1500 characters: the rules with before/after, per-contact notes, permission suggestions>`,
+  `<in ${languageName(profile.language)}, short enough to read in ${profile.name}'s WhatsApp self-chat: the rules with before/after, per-contact notes, permission suggestions>`,
   'EVIDENCE:',
   '<one line per voice rule (rule-N) or contact note (contact-N) you add, with the pair ids that show it, e.g. "rule-1: 12, 15, 18"; nothing if no change>',
   'FILES:',

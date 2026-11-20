@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkPatch, createLearner, MAX_SHOWN, parseProposal, skillPaths } from './learn.js';
+import { checkPatch, createLearner, learnPrompt, MAX_SHOWN, parseProposal, skillPaths } from './learn.js';
 import example from '../../config/example.config.js';
 
 const PROFILE = example.profile; // neutral owner fixture (Alex / OWNER)
@@ -402,4 +402,10 @@ test('/aprender si still applies an old-format pending proposal: model-written d
   assert.equal(readFileSync(join(g.outer, voice), 'utf8'), 'viejo\nregla nueva\n\notra línea\n');
   assert.equal(readFileSync(join(g.outer, contacts), 'utf8'), 'viejo\nnota nueva\n\notra línea\n');
   assert.equal(g.sh(g.inner, 'status', '--porcelain'), '');
+});
+
+test('learnPrompt: the summary is sized for the self-chat, not by a character cap no code enforces', () => {
+  const p = learnPrompt([], [], PROFILE);
+  assert.doesNotMatch(p, /1500 characters/);
+  assert.match(p, new RegExp(`short enough to read in ${PROFILE.name}'s WhatsApp self-chat`));
 });
