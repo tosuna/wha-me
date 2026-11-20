@@ -117,7 +117,12 @@ const meta = ({ jid, name, register, tenant, canTriggerImplementation, autoAppro
   });
 
 // Contact text must not be able to close or open our delimited blocks.
-const stripTags = (s) => String(s).replace(/<\s*\/?\s*(transcript|health|topics|requests|note|handoff)\b[^>]*>/gi, '');
+// Repeats until stable: one pass over `</trans</transcript>cript>` would leave a working `</transcript>`.
+const stripTags = (s) => {
+  let out = String(s);
+  for (let prev; prev !== out;) [prev, out] = [out, out.replace(/<\s*\/?\s*(transcript|health|topics|requests|note|handoff)\b[^>]*>/gi, '')];
+  return out;
+};
 const at = (e) => (e.at ? new Date(e.at).toISOString() : null);
 // owner: the profile tag; the owner's lines say from: tag.toLowerCase().
 const transcriptLine = (owner) => (e) => JSON.stringify({ from: e.author === owner ? owner.toLowerCase() : 'contact', at: at(e), text: stripTags(e.text) });

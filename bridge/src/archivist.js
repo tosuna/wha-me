@@ -9,7 +9,12 @@ const ARCHIVIST_CWD = fileURLToPath(new URL('../runtime/archivist/', import.meta
 const TIMEOUT_MS = 120 * 1000;
 
 // Contact text must not be able to close or open our delimited blocks.
-const stripTags = (s) => String(s ?? '').replace(/<\s*\/?\s*(messages|topics)\b[^>]*>/gi, '');
+// Repeats until stable: one pass over `</mess</messages>ages>` would leave a working `</messages>`.
+const stripTags = (s) => {
+  let out = String(s ?? '');
+  for (let prev; prev !== out;) [prev, out] = [out, out.replace(/<\s*\/?\s*(messages|topics)\b[^>]*>/gi, '')];
+  return out;
+};
 const iso = (at) => (Number.isFinite(at) ? new Date(at).toISOString() : null);
 
 const prompt = ({ profile, chat, entries, knownPeople, visible }) => [
