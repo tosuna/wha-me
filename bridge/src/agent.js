@@ -154,7 +154,10 @@ function traceCollector() {
     trace() {
       if (!end) throw new Error('no result event in claude stream output');
       for (const d of end.permission_denials ?? []) if (calls.has(d.tool_use_id)) calls.get(d.tool_use_id).status = 'denied';
-      return { result: end.result, isError: !!end.is_error, durationMs: end.duration_ms, costUsd: end.total_cost_usd, calls: [...calls.values()] };
+      return {
+        result: end.result, isError: !!end.is_error, durationMs: end.duration_ms, costUsd: end.total_cost_usd, calls: [...calls.values()],
+        ...(end.structured_output !== undefined && { structured: end.structured_output }), // --json-schema runs
+      };
     },
   };
 }
@@ -424,11 +427,11 @@ export function createAgent({ profile, workspace, knowledge, spawn = nodeSpawn, 
     // One Peticiones pipeline step (see pipeline.js): PIPELINE_SETTINGS sandbox, no credentials, CodeGraph only. sessionId starts
     // the step's session, resume (same id) re-enters it after a crash; args: step extras (e.g. --agent reviewer); settings: a
     // stricter variant of PIPELINE_SETTINGS (the read-only plan step). Resolves the trace.
-    runStep({ prompt, args = [], timeoutMs, budgetUsd, sessionId, resume, signal, onEvent, cwd = workspace.root, settings = PIPELINE_SETTINGS }) {
+    runStep({ prompt, args = [], schema, timeoutMs, budgetUsd, sessionId, resume, signal, onEvent, cwd = workspace.root, settings = PIPELINE_SETTINGS }) {
       const a = [
         '--permission-mode', 'bypassPermissions', '--thinking-display', 'summarized', '--settings', JSON.stringify(settings),
         '--strict-mcp-config', '--mcp-config', codegraphMcp, '--max-budget-usd', String(budgetUsd),
-        ...(resume ? ['--resume', resume] : sessionId ? ['--session-id', sessionId] : []), ...args,
+        ...(resume ? ['--resume', resume] : sessionId ? ['--session-id', sessionId] : []), ...(schema ? ['--json-schema', JSON.stringify(schema)] : []), ...args,
       ];
       return run(prompt, a, timeoutMs, cwd, strippedEnv(), replyOut(onEvent), signal);
     },
@@ -441,11 +444,11 @@ export function createAgent({ profile, workspace, knowledge, spawn = nodeSpawn, 
       ];
       return run(prompt, args, 10 * 60 * 1000, REPLY_CWD, env, replyOut()).then((t) => t.result);
     },
-    // /aprender eval judge (see learn-eval.js): the prompt carries everything, so no MCP and no tools at all.
-    runJudge({ prompt }) {
+    // /aprender eval judge (see learn-eval.js): the prompt carries everything, so no MCP and no tools at all; schema: its verdict.
+    runJudge({ prompt, schema }) {
       const { GH_TOKEN, GITHUB_TOKEN, ...env } = process.env;
-      const args = ['--restricted', '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} }), '--tools', ''];
-      return run(prompt, args, REPLY_TIMEOUT, REPLY_CWD, env, replyOut()).then((t) => ({ result: t.result, costUsd: t.costUsd }));
+      const args = ['--restricted', '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} }), '--json-schema', JSON.stringify(schema), '--tools', ''];
+      return run(prompt, args, REPLY_TIMEOUT, REPLY_CWD, env, replyOut()).then((t) => ({ structured: t.structured ?? null, costUsd: t.costUsd }));
     },
     // Image description for the transcript (wa.js describeImage): the image is the only file the run can reach (--add-dir
     // is its own date folder under state/media-tmp), Read is the only tool and there is no MCP. The image, its caption

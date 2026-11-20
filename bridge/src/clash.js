@@ -46,11 +46,13 @@ export function overlaps(mine, others) {
   return out;
 }
 
-// The tech lead's answer -> { clash, impact, recommendation } from its last ```json block; anything else is a clash.
-export function parseClash(text) {
-  const json = [...String(text ?? '').matchAll(/```json[ \t]*\n([\s\S]*?)```/g)].at(-1)?.[1];
-  let v;
-  try { v = JSON.parse(json); } catch { return INVALID; }
+// The tech lead run's --json-schema: the CLI validates the verdict and returns it as structured_output.
+export const CLASH_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['clash', 'impact', 'recommendation'],
+  properties: { clash: { type: 'boolean' }, impact: { type: 'string' }, recommendation: { type: 'string' } },
+};
+// The tech lead's structured verdict -> { clash, impact, recommendation }; anything else is a clash.
+export function parseClash(v) {
   if (typeof v?.clash !== 'boolean' || typeof v.impact !== 'string' || typeof v.recommendation !== 'string') return INVALID;
   return { clash: v.clash, impact: v.impact.trim(), recommendation: v.recommendation.trim() };
 }
@@ -152,9 +154,7 @@ export function createClashCheck({ profile, workspace, pipeline, requests, runSt
       ...parts.map(stripTags),
       '</request>',
       '',
-      `End your answer with exactly one fenced \`\`\`json block and nothing after it; impact and recommendation in plain ${languageName(profile.language)}`,
-      '(recommendation e.g. "entregar #2 antes que #3"):',
-      '{ "clash": boolean, "impact": string, "recommendation": string }',
+      `Write impact and recommendation in plain ${languageName(profile.language)} (recommendation e.g. "entregar #2 antes que #3").`,
     ].join('\n');
   }
 
@@ -190,11 +190,11 @@ export function createClashCheck({ profile, workspace, pipeline, requests, runSt
     let cost = 0;
     try {
       const t = await runStep({
-        prompt: await prompt(request, blocks, found, others, signal), args: ARGS, settings,
+        prompt: await prompt(request, blocks, found, others, signal), args: ARGS, schema: CLASH_SCHEMA, settings,
         budgetUsd, timeoutMs: Math.min(timeoutMs ?? Infinity, 15 * 60 * 1000), signal, onEvent,
       });
       cost = Number(t.costUsd) || 0;
-      verdict = parseClash(t.result);
+      verdict = parseClash(t.structured);
     } catch (e) {
       if (signal?.aborted) throw e;
       cost = Number(e.costUsd) || 0;

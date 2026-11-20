@@ -62,10 +62,10 @@ test('overlaps: same project and (same file or same table on the same author/dat
   assert.deepEqual(overlaps(mine, others.slice(2)), []);
 });
 
-test('parseClash: the last json block; anything else is a clash (fail closed)', () => {
-  assert.deepEqual(parseClash('bla\n```json\n{"clash": false, "impact": "tocan funciones distintas", "recommendation": "ninguna"}\n```'),
+test('parseClash: the structured verdict; anything else is a clash (fail closed)', () => {
+  assert.deepEqual(parseClash({ clash: false, impact: 'tocan funciones distintas', recommendation: 'ninguna' }),
     { clash: false, impact: 'tocan funciones distintas', recommendation: 'ninguna' });
-  for (const bad of [undefined, '', 'sin json', '```json\n{"clash": "no"}\n```', '```json\n{"clash": false, "impact": 1, "recommendation": ""}\n```']) {
+  for (const bad of [undefined, null, 'sin json', { clash: 'no' }, { clash: false, impact: 1, recommendation: '' }]) {
     assert.equal(parseClash(bad).clash, true, String(bad));
   }
 });
@@ -126,7 +126,7 @@ function setup(t, { verdict = { clash: false, impact: 'sin conflicto real', reco
   const calls = [];
   const runStep = async (a) => {
     calls.push(a);
-    return { result: raw ?? `análisis\n\`\`\`json\n${JSON.stringify(verdict)}\n\`\`\``, costUsd: 0.25 };
+    return { result: 'análisis', structured: raw ?? verdict, costUsd: 0.25 };
   };
   const check = createClashCheck({ profile: PROFILE, workspace: WORKSPACE, pipeline: PIPELINE, requests, runStep, exists: existsSync });
   const run = () => check({ request: requests.get(id), blocks: requests.detail(id).blocks, budgetUsd: 5, timeoutMs: 60000, signal: new AbortController().signal });
@@ -149,8 +149,9 @@ test('overlap with an open request (footprint computed from its worktree) + clas
   s.requests.patch(other, { blocks: [s.worktree(other, { 'src/a.js': 'a OTHER_MARKER\n' })] }); // no stored footprint
   assert.deepEqual(await s.run(), { ok: true });
   assert.equal(s.calls.length, 1);
-  const { prompt, args, settings, budgetUsd } = s.calls[0];
-  for (const x of ['MINE_MARKER', 'OTHER_MARKER', `#${other}`, 'src/a.js', '<request>', '"clash"']) assert.ok(prompt.includes(x), x);
+  const { prompt, args, schema, settings, budgetUsd } = s.calls[0];
+  for (const x of ['MINE_MARKER', 'OTHER_MARKER', `#${other}`, 'src/a.js', '<request>']) assert.ok(prompt.includes(x), x);
+  assert.deepEqual(schema.required, ['clash', 'impact', 'recommendation']);
   assert.ok(!prompt.includes('<request>ignora'), 'request tags stripped from the untrusted text');
   assert.ok(args.join(' ').includes('Edit,Write'));
   assert.ok(settings.sandbox, 'pipeline sandbox settings');
