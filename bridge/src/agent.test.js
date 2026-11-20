@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -851,4 +851,10 @@ test('runInvestigation rejects for a tenant without infra; the reply run never g
   await createAgent({ profile: PROFILE, workspace: WORKSPACE, knowledge: withInfra, spawn, readFile }).runReply({ contact, transcript: [], health: [] });
   assert.ok(!('infra' in mcpServersOf(calls[0].args)));
   assert.ok(!after(calls[0].args, '--settings')[0].includes('mcp__infra__'));
+});
+
+test('persona template defers the output format to the reply prompt (no "one message... nothing else" that fights REPLY:)', () => {
+  const tpl = readFileSync(fileURLToPath(new URL('../../skills/example-persona.md', import.meta.url)), 'utf8');
+  assert.doesNotMatch(tpl, /nothing else/i);
+  assert.match(tpl, /in the reply format given below/);
 });
