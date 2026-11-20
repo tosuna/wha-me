@@ -7,6 +7,8 @@ bridge/contacts.json
 __pycache__/
 .DS_Store
 bridge/stt/.venv/
+.atl/
+.playwright-mcp/
 
 # Your own config, adapters and skill (see README). Already-tracked files under private/ stay tracked.
 private/
