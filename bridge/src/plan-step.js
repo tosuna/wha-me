@@ -48,14 +48,25 @@ export function readProjects(text) {
 
 const bad = (reason) => { throw new Error(`plan inválido: ${reason}`); };
 
-// The agent's answer -> { question, blocks, migrations, e2e, risks }, from its last ```json block. A question skips the
-// block checks (the request goes to info_pedida). Throws a Spanish reason otherwise. pipeline: config pipeline (pushable repos).
-export function validatePlan(text, projects, pipeline) {
-  const json = [...String(text ?? '').matchAll(/```json[ \t]*\n([\s\S]*?)```/g)].at(-1)?.[1];
-  if (json == null) bad('la respuesta no trae el bloque json final');
-  let plan;
-  try { plan = JSON.parse(json); } catch (e) { bad(`el json del plan está mal formado (${e.message})`); }
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) bad('el json del plan no es un objeto');
+// The plan run's --json-schema: the CLI validates the shape and returns it as structured_output; validatePlan checks the rest.
+const str = { type: 'string' };
+const list = (items) => ({ type: 'array', items });
+const obj = (properties) => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
+export const planSchema = (pipeline) => ({
+  type: 'object', additionalProperties: false, required: ['blocks', ...(pipeline.migrations.planTarget ? ['migrations'] : []), 'e2e', 'risks'],
+  properties: {
+    // A question sends the request back to the contact and drops the blocks: an empty-looking slot invites side notes.
+    question: { ...str, description: 'Only when the request cannot be planned: one question for the contact, in Spanish. Omit it otherwise; notes go in risks.' },
+    blocks: list(obj({ key: str, project: str, goal: str, depends_on: list(str), spec: str })),
+    ...(pipeline.migrations.planTarget && { migrations: list(obj({ project: str, summary: str, file: str, targets: list(obj({ author: str, database: str })) })) }),
+    e2e: list(str), risks: list(str),
+  },
+});
+
+// The agent's structured plan -> { question, blocks, migrations, e2e, risks }. A question skips the block checks (the
+// request goes to info_pedida). Throws a Spanish reason otherwise. pipeline: config pipeline (pushable repos).
+export function validatePlan(plan, projects, pipeline) {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) bad('la respuesta no trae el plan estructurado');
   const list = (v, what) => { if (!Array.isArray(v ?? [])) bad(`${what} debe ser una lista`); return v ?? []; };
   const question = typeof plan.question === 'string' && plan.question.trim() ? plan.question.trim() : null;
   const blocks = list(plan.blocks, 'blocks');
@@ -146,8 +157,8 @@ function planPrompt(request, evidence, profile, workspace, pipeline) {
     ...evidence.map((b) => stripTags(JSON.stringify(b))),
     '</request>',
     '',
-    'End your answer with exactly one fenced ```json block and nothing after it:',
-    '{ "question": string|null, "blocks": [{ "key": string, "project": string, "goal": string, "depends_on": [key], "spec": "<markdown>" }],',
+    'Return the plan as your structured output, in this shape:',
+    '{ "question"?: string (omit unless asking; notes go in risks), "blocks": [{ "key": string, "project": string, "goal": string, "depends_on": [key], "spec": "<markdown>" }],',
     ...(pipeline.migrations.planTarget ? [`  "migrations": [{ "project": string, "summary": string, "file": string, "targets": [${pipeline.migrations.planTarget}] }],`] : []),
     '  "e2e": [string], "risks": [string] }',
   ].join('\n');
@@ -195,11 +206,11 @@ export function createPlanStep({
       if (!plan) {
         await prodCode.fresh();
         const t = await runStep({
-          prompt: planPrompt(request, stored.evidence, profile, workspace, pipeline), args: PLAN_ARGS, settings, timeoutMs, budgetUsd, sessionId, resume, signal, onEvent,
+          prompt: planPrompt(request, stored.evidence, profile, workspace, pipeline), args: PLAN_ARGS, schema: planSchema(pipeline), settings, timeoutMs, budgetUsd, sessionId, resume, signal, onEvent,
         });
         costUsd = Number(t.costUsd) || 0;
         result = t.result;
-        plan = validatePlan(t.result, projects, pipeline);
+        plan = validatePlan(t.structured, projects, pipeline);
         if (plan.question) return { costUsd, result, question: plan.question };
       }
       const blocks = await prepare(request.id, plan, projects, signal);

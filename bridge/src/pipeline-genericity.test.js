@@ -27,7 +27,7 @@ async function planRun(c) {
   const plan = { question: null, blocks: [{ key: 'ui', project: repo, goal: 'g', depends_on: [], spec: SPEC }], migrations: [], e2e: [], risks: [] };
   await createPlanStep({
     profile: c.profile, workspace: c.workspace, pipeline: c.pipeline, requests, prodCode: { fresh: async () => {} }, projectsYaml: () => yamlOf(repo), requestsDir: mkdtempSync(join(tmpdir(), 'wa-gen-')),
-    runStep: async (a) => { prompt = a.prompt; return { result: `\`\`\`json\n${JSON.stringify(plan)}\n\`\`\``, costUsd: 0 }; },
+    runStep: async (a) => { prompt = a.prompt; return { structured: plan, costUsd: 0 }; },
     execFile: async (cmd, args) => { exec.push([cmd, ...args].join(' ')); return { stdout: '' }; }, exists: () => false, copyFile: () => {},
   })({ request: { id: 7, summary: 's' }, budgetUsd: 1, timeoutMs: 1 });
   return { prompt, exec };
